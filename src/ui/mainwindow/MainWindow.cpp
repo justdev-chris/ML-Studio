@@ -1,15 +1,13 @@
 #include "MainWindow.h"
 #include "dialogs/PreferencesDialog.h"
 #include "dialogs/ExportDialog.h"
-#include <QMenuBar>
-#include <QToolBar>
-#include <QStatusBar>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QMessageBox>
+#include <QMenu>
+#include <QAction>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <QApplication>
+#include <QSettings>
+#include <QDebug>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -66,7 +64,6 @@ void MainWindow::createMenuBar() {
 
     // File menu
     QMenu* fileMenu = menuBar->addMenu("&File");
-
     QAction* newAction = new QAction("&New Project", this);
     newAction->setShortcut(QKeySequence::New);
     connect(newAction, &QAction::triggered, this, &MainWindow::newProject);
@@ -103,18 +100,13 @@ void MainWindow::createMenuBar() {
 
     // Edit menu
     QMenu* editMenu = menuBar->addMenu("&Edit");
-
     QAction* prefsAction = new QAction("&Preferences", this);
     prefsAction->setShortcut(QKeySequence("Ctrl+,"));
     connect(prefsAction, &QAction::triggered, this, &MainWindow::showPreferences);
     editMenu->addAction(prefsAction);
 
-    // View menu
-    QMenu* viewMenu = menuBar->addMenu("&View");
-
     // Track menu
     QMenu* trackMenu = menuBar->addMenu("&Track");
-
     QAction* addTrackAction = new QAction("Add &Audio Track", this);
     connect(addTrackAction, &QAction::triggered, this, &MainWindow::addAudioTrack);
     trackMenu->addAction(addTrackAction);
@@ -125,7 +117,6 @@ void MainWindow::createMenuBar() {
 
     // Help menu
     QMenu* helpMenu = menuBar->addMenu("&Help");
-
     QAction* aboutAction = new QAction("&About", this);
     connect(aboutAction, &QAction::triggered, this, &MainWindow::showAbout);
     helpMenu->addAction(aboutAction);
@@ -135,7 +126,6 @@ void MainWindow::createToolBar() {
     QToolBar* toolbar = addToolBar("Main");
     toolbar->setMovable(false);
 
-    // Transport buttons
     QAction* playAction = new QAction("▶ Play", this);
     connect(playAction, &QAction::triggered, this, &MainWindow::play);
     toolbar->addAction(playAction);
@@ -145,7 +135,8 @@ void MainWindow::createToolBar() {
     toolbar->addAction(stopAction);
 
     QAction* recordAction = new QAction("● Record", this);
-    connect(recordAction, &QAction::triggered, this, &MainWindow::record);
+    recordAction->setCheckable(true);
+    connect(recordAction, &QAction::toggled, this, &MainWindow::record);
     toolbar->addAction(recordAction);
 
     toolbar->addSeparator();
@@ -172,7 +163,6 @@ void MainWindow::createCentralWidget() {
     // Main splitter
     QSplitter* mainSplitter = new QSplitter(Qt::Horizontal, this);
 
-    // Left side: timeline + piano roll
     QWidget* leftPanel = new QWidget(this);
     QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -180,7 +170,6 @@ void MainWindow::createCentralWidget() {
     leftLayout->addWidget(m_timeline, 3);
     leftLayout->addWidget(m_pianoRoll, 1);
 
-    // Right side: mixer + plugin browser
     QWidget* rightPanel = new QWidget(this);
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(0, 0, 0, 0);
@@ -192,7 +181,6 @@ void MainWindow::createCentralWidget() {
     mainSplitter->addWidget(rightPanel);
     mainSplitter->setSizes({1000, 400});
 
-    // Transport at bottom
     QWidget* central = new QWidget(this);
     QVBoxLayout* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -204,7 +192,7 @@ void MainWindow::createCentralWidget() {
 }
 
 void MainWindow::setupConnections() {
-    // Transport → Engine
+    // --- Transport → Engine ---
     connect(m_transport, &TransportWidget::playPressed, this, &MainWindow::play);
     connect(m_transport, &TransportWidget::stopPressed, this, &MainWindow::stop);
     connect(m_transport, &TransportWidget::recordPressed, this, &MainWindow::record);
@@ -212,23 +200,30 @@ void MainWindow::setupConnections() {
     connect(m_transport, &TransportWidget::tempoChanged, this, &MainWindow::setTempo);
     connect(m_transport, &TransportWidget::positionChanged, this, &MainWindow::setPosition);
 
-    // Mixer → Engine
+    // --- Engine → Transport ---
+    connect(m_engine, &AudioEngine::positionChanged, this, &MainWindow::updatePlayhead);
+    connect(m_engine, &AudioEngine::transportStateChanged, this, &MainWindow::updateTransportState);
+    connect(m_engine, &AudioEngine::tempoChanged, this, [this](double bpm) {
+        m_transport->setTempo(static_cast<int>(bpm));
+    });
+
+    // --- Engine → Timeline ---
+    connect(m_engine, &AudioEngine::playheadMoved, this, &MainWindow::updatePlayhead);
+
+    // --- Mixer → Engine ---
     connect(m_mixerWidget, &MixerWidget::trackVolumeChanged, this, &MainWindow::setTrackVolume);
     connect(m_mixerWidget, &MixerWidget::trackPanChanged, this, &MainWindow::setTrackPan);
     connect(m_mixerWidget, &MixerWidget::trackMuteToggled, this, &MainWindow::setTrackMute);
     connect(m_mixerWidget, &MixerWidget::trackSoloToggled, this, &MainWindow::setTrackSolo);
     connect(m_mixerWidget, &MixerWidget::masterVolumeChanged, this, &MainWindow::setMasterVolume);
 
-    // Plugin browser → PluginHost
+    // --- Plugin Browser → PluginHost ---
     connect(m_pluginBrowser, &PluginBrowserWidget::pluginDoubleClicked, this, &MainWindow::addPluginToTrack);
+    connect(m_pluginBrowser, &PluginBrowserWidget::pluginAddedToTrack, this, &MainWindow::addPluginToTrack);
 
-    // MIDI → PianoRoll
+    // --- MIDI → PianoRoll ---
     connect(m_midi, &MIDI::noteOnReceived, m_pianoRoll, &PianoRollWidget::midiNoteOn);
     connect(m_midi, &MIDI::noteOffReceived, m_pianoRoll, &PianoRollWidget::midiNoteOff);
-
-    // Engine → Transport
-    connect(m_engine, &AudioEngine::positionChanged, m_transport, &TransportWidget::updateTimeDisplay);
-    connect(m_engine, &AudioEngine::transportStateChanged, this, &MainWindow::updateTransportState);
 }
 
 void MainWindow::newProject() {
@@ -320,12 +315,11 @@ void MainWindow::exportAudio() {
 }
 
 void MainWindow::doExport(const QString& path, const QString& format, int bitDepth, int sampleRate, bool normalize) {
+    // TODO: Implement actual export
     Q_UNUSED(format);
     Q_UNUSED(bitDepth);
     Q_UNUSED(sampleRate);
     Q_UNUSED(normalize);
-
-    // TODO: Implement actual export
     statusBar()->showMessage("Exporting to: " + path);
     QMessageBox::information(this, "Export", "Export not yet implemented.");
 }
@@ -343,6 +337,8 @@ void MainWindow::applyPreferences() {
     int sampleRate = settings.value("audio/sampleRate", 44100).toInt();
     int bufferSize = settings.value("audio/bufferSize", 256).toInt();
     m_engine->initialize(sampleRate, bufferSize);
+    m_pluginHost->setSampleRate(sampleRate);
+    m_pluginHost->setBlockSize(bufferSize);
 
     // Apply theme
     QString theme = settings.value("appearance/theme", "Dark").toString();
@@ -354,10 +350,17 @@ void MainWindow::applyPreferences() {
 void MainWindow::loadPreferences() {
     QSettings settings("MeowyLoops", "Studio");
 
-    // Load audio settings
     int sampleRate = settings.value("audio/sampleRate", 44100).toInt();
     int bufferSize = settings.value("audio/bufferSize", 256).toInt();
     m_engine->initialize(sampleRate, bufferSize);
+    m_pluginHost->setSampleRate(sampleRate);
+    m_pluginHost->setBlockSize(bufferSize);
+
+    // Load MIDI devices
+    QString midiInput = settings.value("midi/input", "None").toString();
+    if (midiInput != "None") {
+        m_midi->openInput(midiInput);
+    }
 
     // Load appearance settings
     QString theme = settings.value("appearance/theme", "Dark").toString();
@@ -397,26 +400,33 @@ void MainWindow::addMIDITrack() {
 }
 
 void MainWindow::addPluginToTrack(const PluginInfo& info) {
-    // Add plugin to selected track
-    // TODO: Get selected track from UI
+    // Get selected track from mixer (or first track)
+    // TODO: Add track selection UI
     statusBar()->showMessage("Added plugin: " + info.name);
 }
 
 void MainWindow::play() {
     if (m_engine) {
         m_engine->play();
+        m_isPlaying = true;
     }
 }
 
 void MainWindow::stop() {
     if (m_engine) {
         m_engine->stop();
+        m_isPlaying = false;
+        m_isRecording = false;
     }
 }
 
-void MainWindow::record() {
+void MainWindow::record(bool armed) {
     if (m_engine) {
-        m_engine->record();
+        m_engine->record(armed);
+        m_isRecording = armed;
+        if (armed) {
+            m_isPlaying = true;
+        }
     }
 }
 
@@ -433,11 +443,26 @@ void MainWindow::setTempo(int bpm) {
 }
 
 void MainWindow::setPosition(int frames) {
-    // Convert frames to seconds
     double seconds = frames / 44100.0;
     if (m_engine) {
         m_engine->setPosition(seconds);
     }
+}
+
+void MainWindow::updateTransportState(bool playing) {
+    m_isPlaying = playing;
+    m_transport->setPlaying(playing);
+    if (!playing) {
+        m_isRecording = false;
+        m_transport->setRecording(false);
+    }
+}
+
+void MainWindow::updatePlayhead(double seconds) {
+    m_currentPosition = seconds;
+    int frames = static_cast<int>(seconds * 44100);
+    m_timeline->setPlayheadPosition(frames);
+    m_transport->updateTimeDisplay(0, 0, 0); // TODO: Convert seconds to bars/beats/ticks
 }
 
 void MainWindow::setTrackVolume(int index, float volume) {
@@ -470,14 +495,9 @@ void MainWindow::setMasterVolume(float volume) {
     }
 }
 
-void MainWindow::updateTransportState(bool playing) {
-    m_transport->setPlaying(playing);
-}
-
 void MainWindow::updateUI() {
     if (!m_engine) return;
 
-    // Update mixer
     m_mixerWidget->setTrackCount(m_engine->getTrackCount());
     for (int i = 0; i < m_engine->getTrackCount(); i++) {
         Track* track = m_engine->getTrack(i);
@@ -490,9 +510,11 @@ void MainWindow::updateUI() {
         }
     }
 
-    // Update timeline
     m_timeline->setTracks(m_engine->getTrackCount());
-    // TODO: Add clips to timeline
+}
+
+void MainWindow::updateTimeline() {
+    // TODO: Update timeline clips from project
 }
 
 void MainWindow::showAbout() {
