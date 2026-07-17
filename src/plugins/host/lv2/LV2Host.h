@@ -34,6 +34,7 @@ private:
     PluginInfo m_info;
     void* m_handle = nullptr;
     void* m_plugin = nullptr;
+    void* m_descriptor = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
@@ -41,11 +42,15 @@ private:
 
     // Function pointers
     using InstantiateFunc = void* (*)(void* descriptor, double sampleRate, const char* bundlePath, const void* features);
+    using ActivateFunc = void (*)(void* instance);
     using RunFunc = void (*)(void* instance, uint32_t sampleCount);
+    using DeactivateFunc = void (*)(void* instance);
     using CleanupFunc = void (*)(void* instance);
 
     InstantiateFunc m_instantiate = nullptr;
+    ActivateFunc m_activate = nullptr;
     RunFunc m_run = nullptr;
+    DeactivateFunc m_deactivate = nullptr;
     CleanupFunc m_cleanup = nullptr;
 
     QMap<int, float> m_parameterCache;
