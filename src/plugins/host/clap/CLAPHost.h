@@ -34,17 +34,18 @@ private:
     PluginInfo m_info;
     void* m_handle = nullptr;
     void* m_plugin = nullptr;
+    void* m_entry = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
     bool m_initialized = false;
 
-    // Function pointers (CLAP)
+    // CLAP function pointers
     using InitFunc = bool (*)(void* plugin);
     using DestroyFunc = void (*)(void* plugin);
     using ProcessFunc = bool (*)(void* plugin, void* processData);
-    using SetParamFunc = void (*)(void* plugin, int index, float value);
-    using GetParamFunc = float (*)(void* plugin, int index);
+    using SetParamFunc = void (*)(void* plugin, int index, double value);
+    using GetParamFunc = double (*)(void* plugin, int index);
 
     InitFunc m_init = nullptr;
     DestroyFunc m_destroy = nullptr;
