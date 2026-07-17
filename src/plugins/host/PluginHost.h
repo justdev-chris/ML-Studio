@@ -6,8 +6,7 @@
 #include <QVector>
 #include <QMap>
 #include <QList>
-#include <QSharedPointer>
-#include <functional>
+#include <QMutex>
 
 struct PluginParameter {
     QString id;
@@ -54,9 +53,8 @@ public:
     virtual void setBlockSize(int blockSize) = 0;
 
     virtual PluginInfo getInfo() const = 0;
-    virtual void* getNativeHandle() const = 0; // For editor UI
+    virtual void* getNativeHandle() const = 0;
 
-    // Optional: Editor UI
     virtual bool hasEditor() const { return false; }
     virtual void* createEditor(void* parent) { return nullptr; }
     virtual void destroyEditor(void* editor) {}
@@ -97,6 +95,12 @@ public:
     QList<PluginInstance*> getActiveInstances() const { return m_activeInstances; }
     int getActiveInstanceCount() const { return m_activeInstances.size(); }
 
+    // Host settings
+    void setSampleRate(double sampleRate);
+    void setBlockSize(int blockSize);
+    double getSampleRate() const { return m_sampleRate; }
+    int getBlockSize() const { return m_blockSize; }
+
 signals:
     void scanStarted(const QString& path);
     void scanProgress(int percent, const QString& message);
@@ -109,6 +113,10 @@ signals:
 private:
     QVector<PluginInfo> m_availablePlugins;
     QList<PluginInstance*> m_activeInstances;
+    QMutex m_mutex;
+
+    double m_sampleRate = 44100.0;
+    int m_blockSize = 256;
 
     void addPlugin(const PluginInfo& info);
     void removePlugin(const QString& id);
@@ -120,7 +128,6 @@ private:
     PluginInstance* createCLAP(const PluginInfo& info);
     PluginInstance* createAU(const PluginInfo& info);
 
-    // Path scanning utilities
     void scanDirectory(const QString& path, const QStringList& extensions, const QString& format);
 };
 
