@@ -1,18 +1,12 @@
 #include "LV2Host.h"
 #include <QDebug>
 #include <QFile>
-#include <QCoreApplication>
-#include <cstring>
+#include <QDir>
 
 #ifdef _WIN32
     #include <windows.h>
-    #define LIB_EXTENSION ".dll"
-#elif __APPLE__
-    #include <dlfcn.h>
-    #define LIB_EXTENSION ".dylib"
 #else
     #include <dlfcn.h>
-    #define LIB_EXTENSION ".so"
 #endif
 
 LV2Host::LV2Host(const PluginInfo& info)
@@ -31,12 +25,6 @@ bool LV2Host::initialize(double sampleRate, int blockSize) {
 
     if (!loadPlugin()) {
         qWarning() << "Failed to load LV2 plugin:" << m_info.path;
-        return false;
-    }
-
-    if (!setupAudioProcessing()) {
-        qWarning() << "Failed to setup audio processing for LV2 plugin";
-        unloadPlugin();
         return false;
     }
 
@@ -69,9 +57,15 @@ void LV2Host::shutdown() {
 }
 
 void LV2Host::process(float** inputs, float** outputs, int numChannels, int numFrames) {
-    if (!m_initialized || !m_plugin || !m_run) return;
-    if (numFrames <= 0 || numChannels <= 0) return;
-    if (numFrames > m_blockSize) return;
+    if (!m_initialized || !m_plugin) {
+        // Passthrough
+        for (int c = 0; c < numChannels && c < 2; c++) {
+            if (inputs[c] && outputs[c] && inputs[c] != outputs[c]) {
+                memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
+            }
+        }
+        return;
+    }
 
     // Copy inputs to LV2 buffers
     for (int c = 0; c < numChannels && c < 2; c++) {
@@ -82,11 +76,15 @@ void LV2Host::process(float** inputs, float** outputs, int numChannels, int numF
         }
     }
 
-    // Connect buffers to plugin (in a real implementation, you'd use LV2's port system)
-    // For now: passthrough
+    // Call LV2 run function
+    if (m_run) {
+        m_run(m_plugin, numFrames);
+    }
+
+    // Copy outputs back
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (outputs[c]) {
-            std::memcpy(outputs[c], m_inputBuffers[c], numFrames * sizeof(float));
+            std::memcpy(outputs[c], m_outputBuffers[c], numFrames * sizeof(float));
         }
     }
 }
@@ -113,38 +111,38 @@ bool LV2Host::loadPlugin() {
     QString path = m_info.path;
 
     // LV2 plugins are directories containing a .so/.dll
-    // Look for the actual library file
     QFileInfo info(path);
     if (info.isDir()) {
         QDir dir(path);
-        #ifdef _WIN32
-        QStringList filters = {"*.dll"};
-        #else
-        QStringList filters = {"*.so", "*.dylib"};
-        #endif
-        QStringList files = dir.entryList(filters, QDir::Files);
+#ifdef _WIN32
+        QStringList files = dir.entryList({"*.dll"}, QDir::Files);
+#else
+        QStringList files = dir.entryList({"*.so", "*.dylib"}, QDir::Files);
+#endif
         if (!files.isEmpty()) {
             path = dir.absoluteFilePath(files.first());
         } else {
             // Try .so with the same name as the directory
             QString baseName = info.baseName();
-            #ifdef _WIN32
+#ifdef _WIN32
             path = dir.absoluteFilePath(baseName + ".dll");
-            #else
+#else
             path = dir.absoluteFilePath("lib" + baseName + ".so");
-            #endif
+#endif
         }
     }
 
-    m_handle = loadLibrary(path);
+    // Load library
+#ifdef _WIN32
+    m_handle = LoadLibraryW(path.toStdWString().c_str());
     if (!m_handle) {
-        qWarning() << "Failed to load LV2 library:" << path;
+        qWarning() << "Failed to load LV2 DLL:" << path;
         return false;
     }
 
     // Get LV2 descriptor function
     using DescriptorFunc = void* (*)(uint32_t index);
-    auto descriptor = reinterpret_cast<DescriptorFunc>(getFunction(m_handle, "lv2_descriptor"));
+    auto descriptor = (DescriptorFunc)GetProcAddress((HMODULE)m_handle, "lv2_descriptor");
     if (!descriptor) {
         qWarning() << "Failed to get lv2_descriptor function";
         unloadPlugin();
@@ -159,9 +157,9 @@ bool LV2Host::loadPlugin() {
         return false;
     }
 
-    // Get instantiate function from descriptor
-    // (This is simplified — in a real implementation you'd read the descriptor struct)
-    m_instantiate = reinterpret_cast<InstantiateFunc>(getFunction(m_handle, "instantiate"));
+    // Get instantiate function
+    using InstantiateFunc = void* (*)(void* descriptor, double sampleRate, const char* bundlePath, const void* features);
+    m_instantiate = (InstantiateFunc)GetProcAddress((HMODULE)m_handle, "instantiate");
     if (!m_instantiate) {
         qWarning() << "Failed to get instantiate function";
         unloadPlugin();
@@ -176,68 +174,85 @@ bool LV2Host::loadPlugin() {
         return false;
     }
 
-    // Get other functions
-    m_activate = reinterpret_cast<ActivateFunc>(getFunction(m_handle, "activate"));
-    m_run = reinterpret_cast<RunFunc>(getFunction(m_handle, "run"));
-    m_deactivate = reinterpret_cast<DeactivateFunc>(getFunction(m_handle, "deactivate"));
-    m_cleanup = reinterpret_cast<CleanupFunc>(getFunction(m_handle, "cleanup"));
-
-    if (m_activate) {
-        m_activate(m_plugin);
+    // Get run function
+    using RunFunc = void (*)(void* instance, uint32_t sampleCount);
+    m_run = (RunFunc)GetProcAddress((HMODULE)m_handle, "run");
+    if (!m_run) {
+        qWarning() << "Failed to get run function";
+        unloadPlugin();
+        return false;
     }
 
     return true;
+
+#else
+    m_handle = dlopen(path.toUtf8().constData(), RTLD_LAZY);
+    if (!m_handle) {
+        qWarning() << "Failed to load LV2 library:" << dlerror();
+        return false;
+    }
+
+    // Get LV2 descriptor function
+    using DescriptorFunc = void* (*)(uint32_t index);
+    auto descriptor = (DescriptorFunc)dlsym(m_handle, "lv2_descriptor");
+    if (!descriptor) {
+        qWarning() << "Failed to get lv2_descriptor function:" << dlerror();
+        unloadPlugin();
+        return false;
+    }
+
+    // Get plugin descriptor (index 0)
+    void* pluginDescriptor = descriptor(0);
+    if (!pluginDescriptor) {
+        qWarning() << "Failed to get LV2 plugin descriptor";
+        unloadPlugin();
+        return false;
+    }
+
+    // Get instantiate function
+    using InstantiateFunc = void* (*)(void* descriptor, double sampleRate, const char* bundlePath, const void* features);
+    m_instantiate = (InstantiateFunc)dlsym(m_handle, "instantiate");
+    if (!m_instantiate) {
+        qWarning() << "Failed to get instantiate function:" << dlerror();
+        unloadPlugin();
+        return false;
+    }
+
+    // Create plugin instance
+    m_plugin = m_instantiate(pluginDescriptor, m_sampleRate, m_info.path.toUtf8().constData(), nullptr);
+    if (!m_plugin) {
+        qWarning() << "Failed to instantiate LV2 plugin";
+        unloadPlugin();
+        return false;
+    }
+
+    // Get run function
+    using RunFunc = void (*)(void* instance, uint32_t sampleCount);
+    m_run = (RunFunc)dlsym(m_handle, "run");
+    if (!m_run) {
+        qWarning() << "Failed to get run function:" << dlerror();
+        unloadPlugin();
+        return false;
+    }
+
+    return true;
+#endif
 }
 
 void LV2Host::unloadPlugin() {
-    if (m_plugin && m_deactivate) {
-        m_deactivate(m_plugin);
-    }
     if (m_plugin && m_cleanup) {
         m_cleanup(m_plugin);
         m_plugin = nullptr;
     }
     if (m_handle) {
-        unloadLibrary(m_handle);
+#ifdef _WIN32
+        FreeLibrary((HMODULE)m_handle);
+#else
+        dlclose(m_handle);
+#endif
         m_handle = nullptr;
     }
     m_instantiate = nullptr;
-    m_activate = nullptr;
     m_run = nullptr;
-    m_deactivate = nullptr;
     m_cleanup = nullptr;
 }
-
-bool LV2Host::setupAudioProcessing() {
-    // In a real implementation: setup ports, buffers, and connections
-    return true;
-}
-
-// Platform-specific library loading
-#ifdef _WIN32
-LV2Host::HMODULE LV2Host::loadLibrary(const QString& path) {
-    return reinterpret_cast<HMODULE>(::LoadLibraryW(path.toStdWString().c_str()));
-}
-
-void LV2Host::unloadLibrary(HMODULE handle) {
-    if (handle) ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
-}
-
-void* LV2Host::getFunction(HMODULE handle, const char* name) {
-    if (!handle) return nullptr;
-    return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
-}
-#else
-LV2Host::HMODULE LV2Host::loadLibrary(const QString& path) {
-    return dlopen(path.toUtf8().constData(), RTLD_LAZY);
-}
-
-void LV2Host::unloadLibrary(HMODULE handle) {
-    if (handle) dlclose(handle);
-}
-
-void* LV2Host::getFunction(HMODULE handle, const char* name) {
-    if (!handle) return nullptr;
-    return dlsym(handle, name);
-}
-#endif
