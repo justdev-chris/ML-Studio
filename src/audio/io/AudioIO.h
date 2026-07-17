@@ -49,6 +49,9 @@ public:
     float getInputGain() const { return m_inputGain; }
     float getOutputGain() const { return m_outputGain; }
 
+    // Error handling
+    QString getLastError() const { return m_lastError; }
+
 signals:
     void initialized();
     void shutdownComplete();
@@ -57,6 +60,8 @@ signals:
     void error(const QString& message);
     void bufferUnderrun();
     void bufferOverrun();
+    void deviceLost();
+    void deviceRestored();
 
 private:
     bool m_initialized = false;
@@ -75,12 +80,20 @@ private:
 
     AudioCallback m_callback;
     mutable QMutex m_mutex;
+    QString m_lastError;
 
     // PortAudio specific
     void* m_audioStream = nullptr;
     void* m_audioApi = nullptr;
 
     void processAudio(float** input, float** output, int numFrames);
+    bool reconnectStream();
+
+    static int paCallback(const void* inputBuffer, void* outputBuffer,
+                          unsigned long framesPerBuffer,
+                          const PaStreamCallbackTimeInfo* timeInfo,
+                          PaStreamCallbackFlags statusFlags,
+                          void* userData);
 };
 
 #endif // AUDIOIO_H
