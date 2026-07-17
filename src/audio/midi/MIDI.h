@@ -70,6 +70,13 @@ public:
     bool sendControlChange(int channel, int controller, int value);
     bool sendProgramChange(int channel, int program);
     bool sendPitchBend(int channel, int value);
+    bool sendSystemExclusive(const QByteArray& data);
+
+    // Transport sync
+    void sendClock();
+    void sendStart();
+    void sendContinue();
+    void sendStop();
 
     using MIDICallback = std::function<void(const MIDIMessage&)>;
     void setCallback(MIDICallback callback) { m_callback = callback; }
@@ -78,6 +85,8 @@ signals:
     void messageReceived(const MIDIMessage& message);
     void noteOnReceived(int note, int velocity);
     void noteOffReceived(int note);
+    void controlChangeReceived(int controller, int value);
+    void pitchBendReceived(int value);
     void inputOpened(const QString& device);
     void outputOpened(const QString& device);
     void error(const QString& message);
@@ -98,6 +107,11 @@ private:
 
     void processInputMessage(const QByteArray& data, int timestamp);
     static void midiInputCallback(double timeStamp, const unsigned char* message, size_t size, void* userData);
+
+    void handleNoteOn(int note, int velocity);
+    void handleNoteOff(int note);
+    void handleControlChange(int controller, int value);
+    void handlePitchBend(int value);
 };
 
 #endif // MIDI_H
