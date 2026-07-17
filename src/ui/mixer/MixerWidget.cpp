@@ -1,15 +1,12 @@
 #include "MixerWidget.h"
-
 #include <QScrollBar>
 #include <QLabel>
 #include <QSlider>
 #include <QPushButton>
-#include <QHBoxLayout>
 #include <QVBoxLayout>
-#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QPainter>
 #include <QStyle>
-#include <QDebug>
 
 MixerWidget::MixerWidget(QWidget* parent)
     : QWidget(parent) {
@@ -24,13 +21,11 @@ void MixerWidget::setupUI() {
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // Title
     QLabel* title = new QLabel("Mixer", this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet("font-size: 14px; font-weight: bold; padding: 8px; background-color: #1a1a20;");
     mainLayout->addWidget(title);
 
-    // Scroll area for tracks
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setWidgetResizable(true);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -96,18 +91,14 @@ void MixerWidget::setupUI() {
 void MixerWidget::setTrackCount(int count) {
     m_trackCount = count;
 
-    // Clear existing tracks
     for (auto& channel : m_trackChannels) {
         delete channel.container;
     }
     m_trackChannels.clear();
 
-    // Remove all widgets from layout
     while (m_trackLayout->count() > 1) {
         QLayoutItem* item = m_trackLayout->takeAt(0);
-        if (item->widget()) {
-            delete item->widget();
-        }
+        if (item->widget()) delete item->widget();
         delete item;
     }
 
@@ -119,7 +110,6 @@ void MixerWidget::setTrackCount(int count) {
         return;
     }
 
-    // Create new track channels
     for (int i = 0; i < count; i++) {
         TrackChannel channel;
         channel.index = i;
@@ -130,13 +120,11 @@ void MixerWidget::setTrackCount(int count) {
         layout->setContentsMargins(4, 4, 4, 4);
         layout->setSpacing(2);
 
-        // Track name
         channel.nameLabel = new QLabel(QString("Track %1").arg(i + 1));
         channel.nameLabel->setAlignment(Qt::AlignCenter);
         channel.nameLabel->setStyleSheet("color: #ddd; font-weight: bold; font-size: 10px;");
         layout->addWidget(channel.nameLabel);
 
-        // Volume slider (vertical)
         channel.volumeSlider = new QSlider(Qt::Vertical);
         channel.volumeSlider->setRange(0, 100);
         channel.volumeSlider->setValue(80);
@@ -146,13 +134,11 @@ void MixerWidget::setTrackCount(int count) {
         });
         layout->addWidget(channel.volumeSlider);
 
-        // Volume label
         channel.volumeLabel = new QLabel("80%");
         channel.volumeLabel->setAlignment(Qt::AlignCenter);
         channel.volumeLabel->setStyleSheet("color: #aaa; font-size: 8px;");
         layout->addWidget(channel.volumeLabel);
 
-        // Pan slider (horizontal)
         channel.panSlider = new QSlider(Qt::Horizontal);
         channel.panSlider->setRange(-100, 100);
         channel.panSlider->setValue(0);
@@ -162,13 +148,11 @@ void MixerWidget::setTrackCount(int count) {
         });
         layout->addWidget(channel.panSlider);
 
-        // Pan label
         channel.panLabel = new QLabel("0");
         channel.panLabel->setAlignment(Qt::AlignCenter);
         channel.panLabel->setStyleSheet("color: #aaa; font-size: 8px;");
         layout->addWidget(channel.panLabel);
 
-        // Mute and Solo buttons
         QHBoxLayout* buttonLayout = new QHBoxLayout();
         buttonLayout->setSpacing(2);
 
@@ -192,7 +176,6 @@ void MixerWidget::setTrackCount(int count) {
 
         layout->addLayout(buttonLayout);
 
-        // Store channel
         m_trackChannels.append(channel);
         m_trackLayout->insertWidget(m_trackLayout->count() - 1, channel.container);
     }
@@ -232,22 +215,6 @@ void MixerWidget::setMasterVolume(float volume) {
     int value = static_cast<int>(volume * 100);
     m_masterVolumeSlider->setValue(value);
     m_masterVolumeLabel->setText(QString("%1%").arg(value));
-}
-
-void MixerWidget::onVolumeSliderMoved(int value) {
-    // Handled by lambda
-}
-
-void MixerWidget::onPanSliderMoved(int value) {
-    // Handled by lambda
-}
-
-void MixerWidget::onMuteClicked(bool checked) {
-    // Handled by lambda
-}
-
-void MixerWidget::onSoloClicked(bool checked) {
-    // Handled by lambda
 }
 
 void MixerWidget::onMasterVolumeChanged(int value) {
