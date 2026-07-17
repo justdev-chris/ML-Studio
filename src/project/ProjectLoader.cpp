@@ -2,11 +2,12 @@
 #include "Project.h"
 #include "core/track/Track.h"
 #include "core/track/Clip.h"
-
+#include "utils/FileUtils.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
+#include <QJsonDocument>
 #include <QJsonParseError>
 
 ProjectLoader::ProjectLoader(QObject* parent)
@@ -49,34 +50,44 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
     QJsonObject root = doc.object();
 
     // Check version
-    if (!root.contains("version") || root["version"].toString() != "1.0.0") {
-        m_lastError = "Unsupported project version: " + root["version"].toString();
+    if (!root.contains("version")) {
+        m_lastError = "Missing version field";
+        return false;
+    }
+
+    QString version = root["version"].toString();
+    if (version != "1.0.0") {
+        m_lastError = "Unsupported project version: " + version;
         return false;
     }
 
     emit statusMessage("Loading project...");
     emit progressUpdated(10);
 
+    // Parse project metadata
     if (!parseProject(root, project)) {
         return false;
     }
 
     emit progressUpdated(20);
 
+    // Parse settings
     if (!parseSettings(root, project)) {
         return false;
     }
 
     emit progressUpdated(30);
 
+    // Parse tracks
     if (root.contains("tracks") && root["tracks"].isArray()) {
-        if (!parseTracks(root["tracks"].toArray(), project)) {
+        if (!parseTracks(root["tracks"].toArray(), project, filePath)) {
             return false;
         }
     }
 
     emit progressUpdated(60);
 
+    // Parse automation
     if (root.contains("automation")) {
         if (!parseAutomation(root["automation"].toObject(), project)) {
             return false;
@@ -85,6 +96,7 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     emit progressUpdated(80);
 
+    // Parse markers
     if (root.contains("markers") && root["markers"].isArray()) {
         if (!parseMarkers(root["markers"].toArray(), project)) {
             return false;
@@ -93,6 +105,7 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     emit progressUpdated(90);
 
+    // Parse regions
     if (root.contains("regions") && root["regions"].isArray()) {
         if (!parseRegions(root["regions"].toArray(), project)) {
             return false;
@@ -101,6 +114,8 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     project->setFilePath(filePath);
     project->markClean();
+    project->updateModified();
+
     emit statusMessage("Project loaded successfully");
     emit progressUpdated(100);
 
@@ -116,7 +131,12 @@ bool ProjectLoader::parseProject(const QJsonObject& json, Project* project) {
         if (proj.contains("author")) {
             project->setAuthor(proj["author"].toString("Unknown"));
         }
-        // Created and modified timestamps are handled separately
+        if (proj.contains("created")) {
+            project->setCreated(QDateTime::fromString(proj["created"].toString(), Qt::ISODate));
+        }
+        if (proj.contains("modified")) {
+            project->setModified(QDateTime::fromString(proj["modified"].toString(), Qt::ISODate));
+        }
     }
     return true;
 }
@@ -143,7 +163,9 @@ bool ProjectLoader::parseSettings(const QJsonObject& json, Project* project) {
     return true;
 }
 
-bool ProjectLoader::parseTracks(const QJsonArray& tracks, Project* project) {
+bool ProjectLoader::parseTracks(const QJsonArray& tracks, Project* project, const QString& projectPath) {
+    QString projectDir = QFileInfo(projectPath).absolutePath();
+
     for (int i = 0; i < tracks.size(); i++) {
         if (!tracks[i].isObject()) {
             m_lastError = "Track " + QString::number(i) + " is not an object";
@@ -160,7 +182,7 @@ bool ProjectLoader::parseTracks(const QJsonArray& tracks, Project* project) {
         }
 
         Track* track = new Track(type, project->getSampleRate(), project);
-        if (!parseTrack(trackJson, track)) {
+        if (!parseTrack(trackJson, track, projectDir)) {
             delete track;
             return false;
         }
@@ -170,7 +192,7 @@ bool ProjectLoader::parseTracks(const QJsonArray& tracks, Project* project) {
     return true;
 }
 
-bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track) {
+bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const QString& projectDir) {
     if (trackJson.contains("name")) {
         track->setName(trackJson["name"].toString("Track"));
     }
@@ -203,7 +225,7 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track) {
             QString type = clipJson["type"].toString("audio");
             if (type == "audio") {
                 auto* clip = new AudioClip(track);
-                if (!parseAudioClip(clipJson, clip)) {
+                if (!parseAudioClip(clipJson, clip, projectDir)) {
                     delete clip;
                     return false;
                 }
@@ -222,7 +244,7 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track) {
     return true;
 }
 
-bool ProjectLoader::parseAudioClip(const QJsonObject& clipJson, Clip* clip) {
+bool ProjectLoader::parseAudioClip(const QJsonObject& clipJson, Clip* clip, const QString& projectDir) {
     auto* audioClip = dynamic_cast<AudioClip*>(clip);
     if (!audioClip) return false;
 
@@ -243,9 +265,11 @@ bool ProjectLoader::parseAudioClip(const QJsonObject& clipJson, Clip* clip) {
     }
     if (clipJson.contains("file")) {
         QString filePath = clipJson["file"].toString();
-        QString resolvedPath = resolvePath(filePath);
-        if (!resolvedPath.isEmpty()) {
-            audioClip->loadFromFile(resolvedPath);
+        QString fullPath = QDir(projectDir).absoluteFilePath(filePath);
+        if (QFile::exists(fullPath)) {
+            audioClip->loadFromFile(fullPath);
+        } else {
+            qWarning() << "Audio file not found:" << fullPath;
         }
     }
 
@@ -286,6 +310,7 @@ bool ProjectLoader::parseMIDIClip(const QJsonObject& clipJson, Clip* clip) {
 
 bool ProjectLoader::parseAutomation(const QJsonObject& json, Project* project) {
     // TODO: Parse automation data
+    Q_UNUSED(project);
     return true;
 }
 
@@ -312,9 +337,4 @@ bool ProjectLoader::parseRegions(const QJsonArray& regions, Project* project) {
         project->addRegion(start, end, name, color);
     }
     return true;
-}
-
-QString ProjectLoader::resolvePath(const QString& relativePath) {
-    // TODO: Implement proper path resolution
-    return relativePath;
 }
