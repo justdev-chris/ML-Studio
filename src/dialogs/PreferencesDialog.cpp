@@ -18,25 +18,21 @@ void PreferencesDialog::setupUI() {
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setSpacing(8);
 
-    // Tab widget
     m_tabWidget = new QTabWidget(this);
     mainLayout->addWidget(m_tabWidget);
 
-    // Create tabs
     createAudioTab();
     createMIDITab();
     createPluginTab();
     createAppearanceTab();
     createPathsTab();
 
-    // Buttons
     QHBoxLayout* buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
 
     m_resetButton = new QPushButton("Reset Defaults", this);
     connect(m_resetButton, &QPushButton::clicked, this, &PreferencesDialog::onResetDefaults);
     buttonLayout->addWidget(m_resetButton);
-
     buttonLayout->addSpacing(10);
 
     m_okButton = new QPushButton("OK", this);
@@ -58,7 +54,6 @@ void PreferencesDialog::createAudioTab() {
     QWidget* tab = new QWidget(this);
     QVBoxLayout* layout = new QVBoxLayout(tab);
 
-    // Audio Device
     QGroupBox* deviceGroup = new QGroupBox("Audio Device", tab);
     QGridLayout* deviceLayout = new QGridLayout(deviceGroup);
 
@@ -71,7 +66,6 @@ void PreferencesDialog::createAudioTab() {
     deviceLayout->addWidget(deviceLabel, 0, 0);
     deviceLayout->addWidget(m_audioDeviceCombo, 0, 1);
 
-    // Sample Rate
     QLabel* sampleRateLabel = new QLabel("Sample Rate:", deviceGroup);
     m_sampleRateCombo = new QComboBox(deviceGroup);
     m_sampleRateCombo->addItems({"44100", "48000", "88200", "96000", "192000"});
@@ -81,7 +75,6 @@ void PreferencesDialog::createAudioTab() {
     deviceLayout->addWidget(sampleRateLabel, 1, 0);
     deviceLayout->addWidget(m_sampleRateCombo, 1, 1);
 
-    // Buffer Size
     QLabel* bufferLabel = new QLabel("Buffer Size:", deviceGroup);
     m_bufferSizeCombo = new QComboBox(deviceGroup);
     m_bufferSizeCombo->addItems({"64", "128", "256", "512", "1024", "2048"});
@@ -91,7 +84,6 @@ void PreferencesDialog::createAudioTab() {
     deviceLayout->addWidget(bufferLabel, 2, 0);
     deviceLayout->addWidget(m_bufferSizeCombo, 2, 1);
 
-    // Latency
     QLabel* latencyLabel = new QLabel("Latency:", deviceGroup);
     m_latencySlider = new QSlider(Qt::Horizontal, deviceGroup);
     m_latencySlider->setRange(0, 100);
@@ -270,12 +262,6 @@ void PreferencesDialog::loadSettings() {
     m_latencySlider->setValue(settings.value("audio/latency", 50).toInt());
     m_latencyLabel->setText(QString("%1 ms").arg(m_latencySlider->value()));
 
-    // MIDI
-    // (populate from actual MIDI devices)
-
-    // Plugin paths
-    // (populate from settings)
-
     // Appearance
     m_themeCombo->setCurrentText(settings.value("appearance/theme", "Dark").toString());
     m_darkModeCheck->setChecked(settings.value("appearance/darkMode", true).toBool());
@@ -311,17 +297,9 @@ void PreferencesDialog::saveSettings() {
     emit settingsChanged();
 }
 
-void PreferencesDialog::onAudioDeviceChanged(int index) {
-    Q_UNUSED(index);
-}
-
-void PreferencesDialog::onSampleRateChanged(int index) {
-    Q_UNUSED(index);
-}
-
-void PreferencesDialog::onBufferSizeChanged(int index) {
-    Q_UNUSED(index);
-}
+void PreferencesDialog::onAudioDeviceChanged(int index) { Q_UNUSED(index); }
+void PreferencesDialog::onSampleRateChanged(int index) { Q_UNUSED(index); }
+void PreferencesDialog::onBufferSizeChanged(int index) { Q_UNUSED(index); }
 
 void PreferencesDialog::onPluginPathAdded() {
     QString path = QFileDialog::getExistingDirectory(this, "Select Plugin Folder");
@@ -337,12 +315,7 @@ void PreferencesDialog::onPluginPathRemoved() {
     }
 }
 
-void PreferencesDialog::onThemeChanged(int index) {
-    Q_UNUSED(index);
-}
-
 void PreferencesDialog::onResetDefaults() {
-    // Reset all settings to defaults
     m_audioDeviceCombo->setCurrentIndex(0);
     m_sampleRateCombo->setCurrentText("44100");
     m_bufferSizeCombo->setCurrentText("256");
