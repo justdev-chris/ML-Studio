@@ -3,15 +3,15 @@
 #include <QThread>
 #include <cmath>
 
-// PortAudio headers
 #include <portaudio.h>
 
 AudioIO::AudioIO(QObject* parent)
     : QObject(parent) {
     PaError err = Pa_Initialize();
     if (err != paNoError) {
-        qCritical() << "PortAudio initialization error:" << Pa_GetErrorText(err);
-        emit error(QString("PortAudio: %1").arg(Pa_GetErrorText(err)));
+        m_lastError = QString("PortAudio initialization error: %1").arg(Pa_GetErrorText(err));
+        qCritical() << m_lastError;
+        emit error(m_lastError);
     }
 }
 
@@ -30,30 +30,10 @@ bool AudioIO::initialize(int sampleRate, int bufferSize, int numChannels) {
     m_bufferSize = bufferSize;
     m_numChannels = numChannels;
 
-    // Set up PortAudio stream parameters
-    m_outputParams.device = Pa_GetDefaultOutputDevice();
-    if (m_outputParams.device == paNoDevice) {
-        emit error("No audio output device found");
+    if (Pa_GetDeviceCount() < 0) {
+        m_lastError = "No audio devices found";
+        emit error(m_lastError);
         return false;
-    }
-
-    const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(m_outputParams.device);
-    if (!deviceInfo) {
-        emit error("Failed to get device info");
-        return false;
-    }
-
-    m_outputParams.channelCount = numChannels;
-    m_outputParams.sampleFormat = paFloat32;
-    m_outputParams.suggestedLatency = deviceInfo->defaultHighOutputLatency;
-    m_outputParams.hostApiSpecificStreamInfo = nullptr;
-
-    m_inputParams.device = Pa_GetDefaultInputDevice();
-    if (m_inputParams.device != paNoDevice) {
-        m_inputParams.channelCount = numChannels;
-        m_inputParams.sampleFormat = paFloat32;
-        m_inputParams.suggestedLatency = Pa_GetDeviceInfo(m_inputParams.device)->defaultHighInputLatency;
-        m_inputParams.hostApiSpecificStreamInfo = nullptr;
     }
 
     m_initialized = true;
@@ -72,7 +52,8 @@ void AudioIO::shutdown() {
 
 bool AudioIO::start() {
     if (!m_initialized) {
-        qWarning() << "AudioIO not initialized";
+        m_lastError = "AudioIO not initialized";
+        emit error(m_lastError);
         return false;
     }
     if (m_running) {
@@ -80,9 +61,44 @@ bool AudioIO::start() {
         return true;
     }
 
+    PaStreamParameters outputParams;
+    outputParams.device = Pa_GetDefaultOutputDevice();
+    if (outputParams.device == paNoDevice) {
+        m_lastError = "No audio output device found";
+        emit error(m_lastError);
+        return false;
+    }
+
+    const PaDeviceInfo* deviceInfo = Pa_GetDeviceInfo(outputParams.device);
+    if (!deviceInfo) {
+        m_lastError = "Failed to get device info";
+        emit error(m_lastError);
+        return false;
+    }
+
+    outputParams.channelCount = m_numChannels;
+    outputParams.sampleFormat = paFloat32;
+    outputParams.suggestedLatency = deviceInfo->defaultHighOutputLatency;
+    outputParams.hostApiSpecificStreamInfo = nullptr;
+
+    PaStreamParameters inputParams;
+    PaDeviceIndex inputDevice = Pa_GetDefaultInputDevice();
+    if (inputDevice != paNoDevice) {
+        const PaDeviceInfo* inputInfo = Pa_GetDeviceInfo(inputDevice);
+        if (inputInfo) {
+            inputParams.device = inputDevice;
+            inputParams.channelCount = m_numChannels;
+            inputParams.sampleFormat = paFloat32;
+            inputParams.suggestedLatency = inputInfo->defaultHighInputLatency;
+            inputParams.hostApiSpecificStreamInfo = nullptr;
+        } else {
+            inputDevice = paNoDevice;
+        }
+    }
+
     PaError err = Pa_OpenStream(&m_audioStream,
-                                (m_inputParams.device != paNoDevice) ? &m_inputParams : nullptr,
-                                &m_outputParams,
+                                (inputDevice != paNoDevice) ? &inputParams : nullptr,
+                                &outputParams,
                                 m_sampleRate,
                                 m_bufferSize,
                                 paClipOff,
@@ -90,22 +106,24 @@ bool AudioIO::start() {
                                 this);
 
     if (err != paNoError) {
-        qCritical() << "PortAudio open error:" << Pa_GetErrorText(err);
-        emit error(QString("PortAudio open: %1").arg(Pa_GetErrorText(err)));
+        m_lastError = QString("PortAudio open error: %1").arg(Pa_GetErrorText(err));
+        qCritical() << m_lastError;
+        emit error(m_lastError);
         return false;
     }
 
     err = Pa_StartStream(m_audioStream);
     if (err != paNoError) {
-        qCritical() << "PortAudio start error:" << Pa_GetErrorText(err);
-        emit error(QString("PortAudio start: %1").arg(Pa_GetErrorText(err)));
+        m_lastError = QString("PortAudio start error: %1").arg(Pa_GetErrorText(err));
+        qCritical() << m_lastError;
+        emit error(m_lastError);
         Pa_CloseStream(m_audioStream);
         m_audioStream = nullptr;
         return false;
     }
 
     m_running = true;
-    qDebug() << "AudioIO: started";
+    qDebug() << "AudioIO stream started";
     return true;
 }
 
@@ -117,7 +135,7 @@ void AudioIO::stop() {
         m_audioStream = nullptr;
     }
     m_running = false;
-    qDebug() << "AudioIO: stopped";
+    qDebug() << "AudioIO stream stopped";
 }
 
 QList<QString> AudioIO::getInputDevices() const {
@@ -146,7 +164,8 @@ QList<QString> AudioIO::getOutputDevices() const {
 
 bool AudioIO::setInputDevice(const QString& deviceName) {
     if (m_running) {
-        emit error("Cannot change device while running");
+        m_lastError = "Cannot change device while running";
+        emit error(m_lastError);
         return false;
     }
 
@@ -154,18 +173,19 @@ bool AudioIO::setInputDevice(const QString& deviceName) {
     for (int i = 0; i < count; i++) {
         const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
         if (info && QString(info->name) == deviceName && info->maxInputChannels > 0) {
-            m_inputParams.device = i;
             m_currentInputDevice = deviceName;
             emit deviceChanged(deviceName);
             return true;
         }
     }
+    m_lastError = "Device not found: " + deviceName;
     return false;
 }
 
 bool AudioIO::setOutputDevice(const QString& deviceName) {
     if (m_running) {
-        emit error("Cannot change device while running");
+        m_lastError = "Cannot change device while running";
+        emit error(m_lastError);
         return false;
     }
 
@@ -173,12 +193,12 @@ bool AudioIO::setOutputDevice(const QString& deviceName) {
     for (int i = 0; i < count; i++) {
         const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
         if (info && QString(info->name) == deviceName && info->maxOutputChannels > 0) {
-            m_outputParams.device = i;
             m_currentOutputDevice = deviceName;
             emit deviceChanged(deviceName);
             return true;
         }
     }
+    m_lastError = "Device not found: " + deviceName;
     return false;
 }
 
@@ -213,7 +233,6 @@ int AudioIO::paCallback(const void* inputBuffer, void* outputBuffer,
     float* input = (float*)inputBuffer;
     float* output = (float*)outputBuffer;
 
-    // Convert input/output to float arrays
     float* inputChannels[2] = {nullptr, nullptr};
     float* outputChannels[2] = {nullptr, nullptr};
 
@@ -231,31 +250,28 @@ int AudioIO::paCallback(const void* inputBuffer, void* outputBuffer,
         }
     }
 
-    // Apply input gain if any
+    // Apply input gain
     if (input) {
         for (unsigned long i = 0; i < framesPerBuffer * self->m_numChannels; i++) {
             input[i] *= self->m_inputGain;
         }
     }
 
-    // Call user callback
+    // Call user callback (routes to AudioEngine)
     if (self->m_callback) {
         self->m_callback(inputChannels, outputChannels, (int)framesPerBuffer);
-    } else {
-        // Passthrough if no callback
-        if (output && input && output != input) {
-            memcpy(output, input, framesPerBuffer * self->m_numChannels * sizeof(float));
-        }
+    } else if (output && input && output != input) {
+        memcpy(output, input, framesPerBuffer * self->m_numChannels * sizeof(float));
     }
 
-    // Apply output gain if any
+    // Apply output gain
     if (output) {
         for (unsigned long i = 0; i < framesPerBuffer * self->m_numChannels; i++) {
             output[i] *= self->m_outputGain;
         }
     }
 
-    // Check for underruns/overruns
+    // Detect underruns/overruns
     if (statusFlags & paOutputUnderflow) {
         self->emit bufferUnderrun();
     }
