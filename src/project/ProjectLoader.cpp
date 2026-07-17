@@ -49,7 +49,6 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     QJsonObject root = doc.object();
 
-    // Check version
     if (!root.contains("version")) {
         m_lastError = "Missing version field";
         return false;
@@ -64,21 +63,18 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
     emit statusMessage("Loading project...");
     emit progressUpdated(10);
 
-    // Parse project metadata
     if (!parseProject(root, project)) {
         return false;
     }
 
     emit progressUpdated(20);
 
-    // Parse settings
     if (!parseSettings(root, project)) {
         return false;
     }
 
     emit progressUpdated(30);
 
-    // Parse tracks
     if (root.contains("tracks") && root["tracks"].isArray()) {
         if (!parseTracks(root["tracks"].toArray(), project, filePath)) {
             return false;
@@ -87,7 +83,6 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     emit progressUpdated(60);
 
-    // Parse automation
     if (root.contains("automation")) {
         if (!parseAutomation(root["automation"].toObject(), project)) {
             return false;
@@ -96,7 +91,6 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     emit progressUpdated(80);
 
-    // Parse markers
     if (root.contains("markers") && root["markers"].isArray()) {
         if (!parseMarkers(root["markers"].toArray(), project)) {
             return false;
@@ -105,7 +99,6 @@ bool ProjectLoader::load(const QString& filePath, Project* project) {
 
     emit progressUpdated(90);
 
-    // Parse regions
     if (root.contains("regions") && root["regions"].isArray()) {
         if (!parseRegions(root["regions"].toArray(), project)) {
             return false;
@@ -241,6 +234,22 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
         }
     }
 
+    // Parse inserts (plugins)
+    if (trackJson.contains("inserts") && trackJson["inserts"].isArray()) {
+        QJsonArray inserts = trackJson["inserts"].toArray();
+        for (const QJsonValue& insertVal : inserts) {
+            if (!insertVal.isObject()) continue;
+            QJsonObject insertObj = insertVal.toObject();
+            // TODO: Load plugin inserts
+        }
+    }
+
+    // Parse sends
+    if (trackJson.contains("sends") && trackJson["sends"].isArray()) {
+        QJsonArray sends = trackJson["sends"].toArray();
+        // TODO: Load sends
+    }
+
     return true;
 }
 
@@ -265,7 +274,7 @@ bool ProjectLoader::parseAudioClip(const QJsonObject& clipJson, Clip* clip, cons
     }
     if (clipJson.contains("file")) {
         QString filePath = clipJson["file"].toString();
-        QString fullPath = QDir(projectDir).absoluteFilePath(filePath);
+        QString fullPath = resolvePath(filePath, projectDir);
         if (QFile::exists(fullPath)) {
             audioClip->loadFromFile(fullPath);
         } else {
@@ -309,8 +318,26 @@ bool ProjectLoader::parseMIDIClip(const QJsonObject& clipJson, Clip* clip) {
 }
 
 bool ProjectLoader::parseAutomation(const QJsonObject& json, Project* project) {
-    // TODO: Parse automation data
-    Q_UNUSED(project);
+    // Load automation data
+    for (auto it = json.begin(); it != json.end(); ++it) {
+        QString trackKey = it.key();
+        int trackIndex = trackKey.toInt();
+        QJsonObject trackAuto = it.value().toObject();
+
+        for (auto paramIt = trackAuto.begin(); paramIt != trackAuto.end(); ++paramIt) {
+            QString paramName = paramIt.key();
+            QJsonArray points = paramIt.value().toArray();
+
+            for (const QJsonValue& pointVal : points) {
+                if (!pointVal.isObject()) continue;
+                QJsonObject pointObj = pointVal.toObject();
+                double time = pointObj["time"].toDouble(0.0);
+                float value = pointObj["value"].toDouble(0.0f);
+                project->addAutomationPoint(trackIndex, paramName, time, value);
+            }
+        }
+    }
+
     return true;
 }
 
@@ -337,4 +364,23 @@ bool ProjectLoader::parseRegions(const QJsonArray& regions, Project* project) {
         project->addRegion(start, end, name, color);
     }
     return true;
+}
+
+QString ProjectLoader::resolvePath(const QString& relativePath, const QString& baseDir) {
+    if (QFile::exists(relativePath)) {
+        return relativePath;
+    }
+
+    QString fullPath = QDir(baseDir).absoluteFilePath(relativePath);
+    if (QFile::exists(fullPath)) {
+        return fullPath;
+    }
+
+    // Try audio/ subfolder
+    fullPath = QDir(baseDir).absoluteFilePath("audio/" + relativePath);
+    if (QFile::exists(fullPath)) {
+        return fullPath;
+    }
+
+    return relativePath;
 }
