@@ -65,7 +65,6 @@ void ExportDialog::setupUI() {
     formatLayout->addWidget(sampleRateLabel, 2, 0);
     formatLayout->addWidget(m_sampleRateCombo, 2, 1);
 
-    // Options
     m_normalizeCheck = new QCheckBox("Normalize", formatGroup);
     m_normalizeCheck->setChecked(true);
     m_stereoCheck = new QCheckBox("Stereo (2-channel)", formatGroup);
@@ -101,7 +100,6 @@ void ExportDialog::setupUI() {
 
     mainLayout->addLayout(buttonLayout);
 
-    // Default settings
     onFormatChanged(0);
 }
 
@@ -144,10 +142,9 @@ void ExportDialog::onExportClicked() {
     setProgressVisible(true);
     m_statusLabel->setText("Exporting...");
 
-    // Simulate export progress
     QTimer::singleShot(100, this, [this]() {
         for (int i = 0; i <= 100; i += 5) {
-            updateProgress(i);
+            m_progressBar->setValue(i);
             QCoreApplication::processEvents();
         }
         m_statusLabel->setText("Export complete!");
@@ -161,17 +158,11 @@ void ExportDialog::onExportClicked() {
 
 void ExportDialog::onFormatChanged(int index) {
     QString format = m_formatCombo->currentText().toLower();
-    // Show/hide bit depth based on format
     bool lossless = (format == "wav" || format == "aiff" || format == "flac");
     m_bitDepthCombo->setEnabled(lossless);
-
     if (!lossless) {
         m_bitDepthCombo->setCurrentIndex(0);
     }
-}
-
-void ExportDialog::updateProgress(int percent) {
-    m_progressBar->setValue(percent);
 }
 
 void ExportDialog::setProgressVisible(bool visible) {
