@@ -5,16 +5,8 @@
 
 #ifdef _WIN32
     #include <windows.h>
-    #define LIB_EXTENSION ".dll"
-    #define LIB_PREFIX ""
-#elif __APPLE__
-    #include <dlfcn.h>
-    #define LIB_EXTENSION ".dylib"
-    #define LIB_PREFIX ""
 #else
     #include <dlfcn.h>
-    #define LIB_EXTENSION ".so"
-    #define LIB_PREFIX "lib"
 #endif
 
 VST3Host::VST3Host(const PluginInfo& info)
@@ -36,15 +28,16 @@ bool VST3Host::initialize(double sampleRate, int blockSize) {
         return false;
     }
 
-    if (!setupAudioProcessing()) {
-        qWarning() << "Failed to setup audio processing for VST3 plugin";
-        unloadPlugin();
-        return false;
+    // Initialize plugin with sample rate and block size
+    if (m_processor) {
+        // In a real VST3 implementation, you'd call IAudioProcessor::setupProcessing()
+        qDebug() << "VST3 plugin initialized:" << m_info.name;
+        m_initialized = true;
+        return true;
     }
 
-    m_initialized = true;
-    qDebug() << "VST3 plugin initialized:" << m_info.name;
-    return true;
+    unloadPlugin();
+    return false;
 }
 
 void VST3Host::shutdown() {
@@ -55,12 +48,19 @@ void VST3Host::shutdown() {
 }
 
 void VST3Host::process(float** inputs, float** outputs, int numChannels, int numFrames) {
-    if (!m_initialized || !m_processor) return;
-    if (numFrames <= 0 || numChannels <= 0) return;
+    if (!m_initialized || !m_processor) {
+        // Passthrough
+        for (int c = 0; c < numChannels && c < 2; c++) {
+            if (inputs[c] && outputs[c] && inputs[c] != outputs[c]) {
+                memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
+            }
+        }
+        return;
+    }
 
-    // In a real implementation:
+    // In a real VST3 implementation:
     // 1. Copy inputs to VST3 buffers
-    // 2. Call process() on the VST3 processor
+    // 2. Call IAudioProcessor::process()
     // 3. Copy outputs back
 
     // Placeholder: passthrough
@@ -73,14 +73,13 @@ void VST3Host::process(float** inputs, float** outputs, int numChannels, int num
 
 void VST3Host::reset() {
     // Reset plugin state
-    // In a real implementation: call reset() on the VST3 processor
 }
 
 void VST3Host::setParameter(int index, float value) {
     if (index < 0 || index >= getParameterCount()) return;
     m_parameterCache[index] = value;
 
-    // In a real implementation: call setParamNormalized() on the VST3 controller
+    // In a real VST3 implementation: call IEditController::setParamNormalized()
 }
 
 float VST3Host::getParameter(int index) const {
@@ -93,17 +92,17 @@ int VST3Host::getParameterCount() const {
 }
 
 bool VST3Host::hasEditor() const {
-    // In a real implementation: check if the plugin has a UI
+    // In a real VST3 implementation: check if IEditController::createView() exists
     return false;
 }
 
 void* VST3Host::createEditor(void* parent) {
-    // In a real implementation: create the plugin UI
+    // In a real VST3 implementation: create plugin UI
     return nullptr;
 }
 
 void VST3Host::destroyEditor(void* editor) {
-    // In a real implementation: destroy the plugin UI
+    // In a real VST3 implementation: destroy plugin UI
 }
 
 void VST3Host::editorResized(int width, int height) {
@@ -113,118 +112,94 @@ void VST3Host::editorResized(int width, int height) {
 bool VST3Host::loadPlugin() {
     QString path = m_info.path;
 
-    // Check if path is a directory (.vst3 bundle)
+    // Handle VST3 bundle structure
     QFileInfo info(path);
     if (info.isDir()) {
-        // For VST3 bundles on macOS/Windows, look for the actual DLL inside
-        #ifdef _WIN32
-        path = path + "/Contents/x86_64-win/";
-        #elif __APPLE__
-        path = path + "/Contents/MacOS/";
-        #else
-        path = path + "/Contents/x86_64-linux/";
-        #endif
-        // Find the first .dll/.so/.dylib in the directory
+        // Look for the actual library inside the bundle
         QDir dir(path);
-        if (dir.exists()) {
-            QStringList filters;
-            #ifdef _WIN32
-            filters << "*.dll";
-            #elif __APPLE__
-            filters << "*.dylib";
-            #else
-            filters << "*.so";
-            #endif
-            QStringList files = dir.entryList(filters, QDir::Files);
-            if (!files.isEmpty()) {
-                path = dir.absoluteFilePath(files.first());
+#ifdef _WIN32
+        QStringList subDirs = {"x86_64-win", "win64", "x64"};
+        for (const QString& sub : subDirs) {
+            QDir subDir(dir.absoluteFilePath(sub));
+            if (subDir.exists()) {
+                QStringList files = subDir.entryList({"*.dll"}, QDir::Files);
+                if (!files.isEmpty()) {
+                    path = subDir.absoluteFilePath(files.first());
+                    break;
+                }
             }
         }
+#elif __APPLE__
+        QDir contentsDir(dir.absoluteFilePath("Contents/MacOS"));
+        if (contentsDir.exists()) {
+            QStringList files = contentsDir.entryList({"*.dylib", "*.so"}, QDir::Files);
+            if (!files.isEmpty()) {
+                path = contentsDir.absoluteFilePath(files.first());
+            }
+        }
+#else
+        QDir linuxDir(dir.absoluteFilePath("x86_64-linux"));
+        if (linuxDir.exists()) {
+            QStringList files = linuxDir.entryList({"*.so"}, QDir::Files);
+            if (!files.isEmpty()) {
+                path = linuxDir.absoluteFilePath(files.first());
+            }
+        }
+#endif
     }
 
-    m_handle = loadLibrary(path);
+    // Load library
+#ifdef _WIN32
+    m_handle = LoadLibraryW(path.toStdWString().c_str());
     if (!m_handle) {
-        qWarning() << "Failed to load VST3 library:" << path;
+        qWarning() << "Failed to load VST3 DLL:" << path;
         return false;
     }
 
     // Get factory function
     using GetFactoryFunc = void* (*)();
-    auto getFactory = reinterpret_cast<GetFactoryFunc>(getFunction(m_handle, "GetPluginFactory"));
+    auto getFactory = (GetFactoryFunc)GetProcAddress((HMODULE)m_handle, "GetPluginFactory");
     if (!getFactory) {
-        qWarning() << "Failed to get plugin factory";
-        unloadPlugin();
+        qWarning() << "Failed to get GetPluginFactory";
         return false;
     }
 
-    // Get create function
-    m_createFunc = reinterpret_cast<CreateFunc>(getFunction(m_handle, "createInstance"));
-    if (!m_createFunc) {
-        qWarning() << "Failed to get createInstance function";
-        unloadPlugin();
-        return false;
-    }
+    // In a real VST3 implementation:
+    // 1. Call getFactory() to get the factory object
+    // 2. Create the plugin component
+    // 3. Get the audio processor
 
-    // Create plugin instance
-    m_plugin = m_createFunc();
-    if (!m_plugin) {
-        qWarning() << "Failed to create plugin instance";
-        unloadPlugin();
-        return false;
-    }
-
+    m_processor = (void*)1; // Placeholder
     return true;
+
+#else
+    m_handle = dlopen(path.toUtf8().constData(), RTLD_LAZY);
+    if (!m_handle) {
+        qWarning() << "Failed to load VST3 library:" << dlerror();
+        return false;
+    }
+
+    // Get factory function
+    using GetFactoryFunc = void* (*)();
+    auto getFactory = (GetFactoryFunc)dlsym(m_handle, "GetPluginFactory");
+    if (!getFactory) {
+        qWarning() << "Failed to get GetPluginFactory:" << dlerror();
+        return false;
+    }
+
+    m_processor = (void*)1; // Placeholder
+    return true;
+#endif
 }
 
 void VST3Host::unloadPlugin() {
-    if (m_plugin && m_deleteFunc) {
-        m_deleteFunc(m_plugin);
-        m_plugin = nullptr;
-    }
     if (m_handle) {
-        unloadLibrary(m_handle);
+#ifdef _WIN32
+        FreeLibrary((HMODULE)m_handle);
+#else
+        dlclose(m_handle);
+#endif
         m_handle = nullptr;
     }
-    m_createFunc = nullptr;
-    m_deleteFunc = nullptr;
     m_processor = nullptr;
-    m_controller = nullptr;
 }
-
-bool VST3Host::setupAudioProcessing() {
-    // In a real implementation:
-    // 1. Query the plugin for its processor
-    // 2. Initialize the processor with sample rate and block size
-    // 3. Setup bus configurations
-
-    return true;
-}
-
-// Platform-specific library loading
-#ifdef _WIN32
-VST3Host::HMODULE VST3Host::loadLibrary(const QString& path) {
-    return reinterpret_cast<HMODULE>(::LoadLibraryW(path.toStdWString().c_str()));
-}
-
-void VST3Host::unloadLibrary(HMODULE handle) {
-    if (handle) ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
-}
-
-void* VST3Host::getFunction(HMODULE handle, const char* name) {
-    if (!handle) return nullptr;
-    return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
-}
-#else
-VST3Host::HMODULE VST3Host::loadLibrary(const QString& path) {
-    return dlopen(path.toUtf8().constData(), RTLD_LAZY);
-}
-
-void VST3Host::unloadLibrary(HMODULE handle) {
-    if (handle) dlclose(handle);
-}
-
-void* VST3Host::getFunction(HMODULE handle, const char* name) {
-    if (!handle) return nullptr;
-    return dlsym(handle, name);
-}
-#endif
