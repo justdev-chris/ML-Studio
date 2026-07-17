@@ -1,22 +1,15 @@
 #include "PluginBrowserWidget.h"
-
 #include <QDir>
 #include <QFileInfo>
-#include <QDebug>
 #include <QSettings>
 #include <QHeaderView>
+#include <QDrag>
+#include <QMimeData>
+#include <QDebug>
 
 PluginBrowserWidget::PluginBrowserWidget(QWidget* parent)
     : QWidget(parent) {
     setupUI();
-    // Scan default VST3 path on Windows
-    #ifdef _WIN32
-    scanPlugins("C:/Program Files/Common Files/VST3");
-    #elif __APPLE__
-    scanPlugins("/Library/Audio/Plug-Ins/VST3");
-    #else
-    scanPlugins("/usr/lib/vst3");
-    #endif
 }
 
 PluginBrowserWidget::~PluginBrowserWidget() {}
@@ -26,7 +19,6 @@ void PluginBrowserWidget::setupUI() {
     mainLayout->setContentsMargins(4, 4, 4, 4);
     mainLayout->setSpacing(4);
 
-    // Title
     QLabel* title = new QLabel("Plugin Browser", this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet("font-size: 12px; font-weight: bold; padding: 4px; background-color: #1a1a20; border-radius: 4px;");
@@ -48,7 +40,20 @@ void PluginBrowserWidget::setupUI() {
     m_refreshButton->setStyleSheet("background-color: #2a2a30; color: #ddd; border-radius: 4px; border: 1px solid #3a3a40;");
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() {
         emit scanStarted();
-        scanPlugins("C:/Program Files/Common Files/VST3");
+        QSettings settings("MeowyLoops", "Studio");
+        QStringList paths = settings.value("plugins/paths").toStringList();
+        if (paths.isEmpty()) {
+#ifdef _WIN32
+            paths.append("C:/Program Files/Common Files/VST3");
+#elif __APPLE__
+            paths.append("/Library/Audio/Plug-Ins/VST3");
+#else
+            paths.append("/usr/lib/vst3");
+#endif
+        }
+        for (const QString& path : paths) {
+            scanPlugins(path);
+        }
     });
     controlLayout->addWidget(m_refreshButton);
 
@@ -76,6 +81,7 @@ void PluginBrowserWidget::setupUI() {
             background-color: #1a1a2a;
         }
     )");
+    m_pluginList->setDragEnabled(true);
     connect(m_pluginList, &QListWidget::itemClicked, this, &PluginBrowserWidget::onItemClicked);
     connect(m_pluginList, &QListWidget::itemDoubleClicked, this, &PluginBrowserWidget::onItemDoubleClicked);
     mainLayout->addWidget(m_pluginList);
@@ -102,7 +108,6 @@ void PluginBrowserWidget::setupUI() {
 
     mainLayout->addLayout(bottomLayout);
 
-    // Initial message
     QListWidgetItem* item = new QListWidgetItem("No plugins found. Click ↻ to scan.", m_pluginList);
     item->setFlags(Qt::NoItemFlags);
     item->setTextAlignment(Qt::AlignCenter);
@@ -127,7 +132,6 @@ void PluginBrowserWidget::scanPlugins(const QString& path) {
     int count = 0;
 
     for (const QFileInfo& file : files) {
-        // VST3
         if (file.isDir() && file.suffix().toLower() == "vst3") {
             PluginInfo info;
             info.name = file.baseName();
@@ -138,9 +142,7 @@ void PluginBrowserWidget::scanPlugins(const QString& path) {
             info.isEffect = true;
             m_plugins.append(info);
             count++;
-        }
-        // LV2
-        else if (file.isDir() && file.fileName().contains(".lv2")) {
+        } else if (file.isDir() && file.fileName().contains(".lv2")) {
             PluginInfo info;
             info.name = file.baseName();
             info.vendor = "Unknown";
@@ -150,9 +152,7 @@ void PluginBrowserWidget::scanPlugins(const QString& path) {
             info.isEffect = true;
             m_plugins.append(info);
             count++;
-        }
-        // CLAP
-        else if (file.isFile() && file.suffix().toLower() == "clap") {
+        } else if (file.isFile() && file.suffix().toLower() == "clap") {
             PluginInfo info;
             info.name = file.baseName();
             info.vendor = "Unknown";
@@ -168,18 +168,6 @@ void PluginBrowserWidget::scanPlugins(const QString& path) {
     m_statusLabel->setText(QString("Found %1 plugins").arg(count));
     emit scanFinished(count);
     populateList();
-}
-
-void PluginBrowserWidget::refreshPluginList() {
-    populateList();
-}
-
-void PluginBrowserWidget::clearPlugins() {
-    m_plugins.clear();
-    m_filteredPlugins.clear();
-    m_pluginList->clear();
-    m_statusLabel->setText("Cleared");
-    m_addButton->setEnabled(false);
 }
 
 void PluginBrowserWidget::filterPlugins(const QString& filter) {
@@ -223,8 +211,7 @@ void PluginBrowserWidget::populateList() {
 }
 
 void PluginBrowserWidget::onItemClicked(QListWidgetItem* item) {
-    if (!item) return;
-    if (m_filteredPlugins.isEmpty()) return;
+    if (!item || m_filteredPlugins.isEmpty()) return;
 
     int index = m_pluginList->row(item);
     if (index >= 0 && index < m_filteredPlugins.size()) {
@@ -235,8 +222,7 @@ void PluginBrowserWidget::onItemClicked(QListWidgetItem* item) {
 }
 
 void PluginBrowserWidget::onItemDoubleClicked(QListWidgetItem* item) {
-    if (!item) return;
-    if (m_filteredPlugins.isEmpty()) return;
+    if (!item || m_filteredPlugins.isEmpty()) return;
 
     int index = m_pluginList->row(item);
     if (index >= 0 && index < m_filteredPlugins.size()) {
@@ -246,7 +232,7 @@ void PluginBrowserWidget::onItemDoubleClicked(QListWidgetItem* item) {
 }
 
 PluginInfo PluginBrowserWidget::getSelectedPlugin() const {
-    if (hasSelection()) {
+    if (hasSelection() && m_selectedIndex < m_filteredPlugins.size()) {
         return m_filteredPlugins[m_selectedIndex];
     }
     return PluginInfo();
