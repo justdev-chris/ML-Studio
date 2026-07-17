@@ -40,12 +40,17 @@ private:
     void* m_handle = nullptr;
     void* m_processor = nullptr;
     void* m_controller = nullptr;
+    void* m_component = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
     bool m_initialized = false;
 
     QMap<int, float> m_parameterCache;
+
+    // VST3 function pointers
+    using CreateInstanceFunc = void* (*)(const char* cid, const char* iid);
+    CreateInstanceFunc m_createInstance = nullptr;
 
 #ifdef _WIN32
     using HMODULE = void*;
