@@ -28,11 +28,6 @@ bool CLAPHost::initialize(double sampleRate, int blockSize) {
         return false;
     }
 
-    // Initialize plugin
-    if (m_init) {
-        m_init(m_plugin);
-    }
-
     m_initialized = true;
     qDebug() << "CLAP plugin initialized:" << m_info.name;
     return true;
@@ -74,7 +69,7 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
     // 1. Prepare clap_process_t structure
     // 2. Call clap_plugin::process()
 
-    // Placeholder: passthrough
+    // For now: passthrough
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (inputs[c] && outputs[c] && inputs[c] != outputs[c]) {
             memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
@@ -134,6 +129,8 @@ bool CLAPHost::loadPlugin() {
         return false;
     }
 
+    m_entry = entry();
+
     // Get plugin factory
     using FactoryFunc = void* (*)(const char* plugin_id);
     auto factory = (FactoryFunc)GetProcAddress((HMODULE)m_handle, "clap_factory");
@@ -143,12 +140,25 @@ bool CLAPHost::loadPlugin() {
         return false;
     }
 
-    // In a real CLAP implementation:
-    // 1. Call entry->init()
-    // 2. Call factory->create_plugin()
-    // 3. Store plugin pointer
+    // Create plugin instance
+    m_plugin = factory(m_info.id.toUtf8().constData());
+    if (!m_plugin) {
+        qWarning() << "Failed to create CLAP plugin instance";
+        unloadPlugin();
+        return false;
+    }
 
-    m_plugin = (void*)1; // Placeholder
+    // Get function pointers
+    m_init = (InitFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_init");
+    m_destroy = (DestroyFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_destroy");
+    m_process = (ProcessFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_process");
+    m_setParam = (SetParamFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_set_param");
+    m_getParam = (GetParamFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_get_param");
+
+    if (m_init) {
+        m_init(m_plugin);
+    }
+
     return true;
 
 #else
@@ -167,6 +177,8 @@ bool CLAPHost::loadPlugin() {
         return false;
     }
 
+    m_entry = entry();
+
     // Get plugin factory
     using FactoryFunc = void* (*)(const char* plugin_id);
     auto factory = (FactoryFunc)dlsym(m_handle, "clap_factory");
@@ -176,7 +188,46 @@ bool CLAPHost::loadPlugin() {
         return false;
     }
 
-    m_plugin = (void*)1; // Placeholder
+    // Create plugin instance
+    m_plugin = factory(m_info.id.toUtf8().constData());
+    if (!m_plugin) {
+        qWarning() << "Failed to create CLAP plugin instance";
+        unloadPlugin();
+        return false;
+    }
+
+    // Get function pointers
+    m_init = (InitFunc)dlsym(m_handle, "clap_plugin_init");
+    m_destroy = (DestroyFunc)dlsym(m_handle, "clap_plugin_destroy");
+    m_process = (ProcessFunc)dlsym(m_handle, "clap_plugin_process");
+    m_setParam = (SetParamFunc)dlsym(m_handle, "clap_plugin_set_param");
+    m_getParam = (GetParamFunc)dlsym(m_handle, "clap_plugin_get_param");
+
+    if (m_init) {
+        m_init(m_plugin);
+    }
+
     return true;
 #endif
+}
+
+void CLAPHost::unloadPlugin() {
+    if (m_plugin && m_destroy) {
+        m_destroy(m_plugin);
+        m_plugin = nullptr;
+    }
+    if (m_handle) {
+#ifdef _WIN32
+        FreeLibrary((HMODULE)m_handle);
+#else
+        dlclose(m_handle);
+#endif
+        m_handle = nullptr;
+    }
+    m_entry = nullptr;
+    m_init = nullptr;
+    m_destroy = nullptr;
+    m_process = nullptr;
+    m_setParam = nullptr;
+    m_getParam = nullptr;
 }
