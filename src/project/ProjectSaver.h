@@ -6,8 +6,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QFile>
-#include <QDir>
 
 class Project;
 class Track;
@@ -39,8 +37,11 @@ private:
     QJsonObject serializeAutomation(Project* project);
     QJsonArray serializeMarkers(Project* project);
     QJsonArray serializeRegions(Project* project);
+    QJsonArray serializeInserts(Track* track);
 
-    QString getRelativePath(const QString& absolutePath);
+    QString getRelativePath(const QString& absolutePath, const QString& baseDir);
+    bool copyAudioFile(const QString& sourcePath, const QString& destDir);
+    QString generateUniqueFilename(const QString& baseName, const QString& destDir);
 };
 
 #endif // PROJECTSAVER_H
