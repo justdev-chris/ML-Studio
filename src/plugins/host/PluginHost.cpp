@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QDebug>
+#include <QSettings>
 
 PluginHost::PluginHost(QObject* parent)
     : QObject(parent) {
@@ -27,13 +28,8 @@ void PluginHost::scanPlugins(const QString& path) {
         return;
     }
 
-    // Scan VST3
     scanVST3(path + "/VST3");
-
-    // Scan LV2
     scanLV2(path + "/LV2");
-
-    // Scan CLAP
     scanCLAP(path + "/CLAP");
 
 #ifdef __APPLE__
@@ -145,6 +141,8 @@ PluginInfo PluginHost::getPluginInfo(const QString& id) const {
 }
 
 PluginInstance* PluginHost::createInstance(const QString& id) {
+    QMutexLocker locker(&m_mutex);
+
     PluginInfo info = getPluginInfo(id);
     if (info.id.isEmpty()) {
         emit error("Plugin not found: " + id);
@@ -154,15 +152,13 @@ PluginInstance* PluginHost::createInstance(const QString& id) {
     PluginInstance* instance = nullptr;
 
     if (info.format == "VST3") {
-        instance = new VST3Host(info);
+        instance = createVST3(info);
     } else if (info.format == "LV2") {
-        instance = new LV2Host(info);
+        instance = createLV2(info);
     } else if (info.format == "CLAP") {
-        instance = new CLAPHost(info);
+        instance = createCLAP(info);
     } else if (info.format == "AU") {
-        // AU not implemented yet
-        emit error("AU plugins not supported yet");
-        return nullptr;
+        instance = createAU(info);
     }
 
     if (instance) {
@@ -178,11 +174,14 @@ PluginInstance* PluginHost::createInstance(const QString& id) {
         }
     }
 
+    emit error("Plugin format not supported: " + info.format);
     return nullptr;
 }
 
 void PluginHost::destroyInstance(PluginInstance* instance) {
     if (!instance) return;
+    QMutexLocker locker(&m_mutex);
+
     if (m_activeInstances.removeAll(instance) > 0) {
         instance->shutdown();
         emit instanceDestroyed(instance);
@@ -228,13 +227,6 @@ QVector<PluginInfo> PluginHost::getEffects() const {
     return results;
 }
 
-void PluginHost::addPlugin(const PluginInfo& info) {
-    for (const PluginInfo& existing : m_availablePlugins) {
-        if (existing.id == info.id && existing.format == info.format) return;
-    }
-    m_availablePlugins.append(info);
-}
-
 void PluginHost::setSampleRate(double sampleRate) {
     m_sampleRate = sampleRate;
     for (auto* instance : m_activeInstances) {
@@ -247,4 +239,28 @@ void PluginHost::setBlockSize(int blockSize) {
     for (auto* instance : m_activeInstances) {
         instance->setBlockSize(blockSize);
     }
+}
+
+void PluginHost::addPlugin(const PluginInfo& info) {
+    for (const PluginInfo& existing : m_availablePlugins) {
+        if (existing.id == info.id && existing.format == info.format) return;
+    }
+    m_availablePlugins.append(info);
+}
+
+PluginInstance* PluginHost::createVST3(const PluginInfo& info) {
+    return new VST3Host(info);
+}
+
+PluginInstance* PluginHost::createLV2(const PluginInfo& info) {
+    return new LV2Host(info);
+}
+
+PluginInstance* PluginHost::createCLAP(const PluginInfo& info) {
+    return new CLAPHost(info);
+}
+
+PluginInstance* PluginHost::createAU(const PluginInfo& info) {
+    // AU not implemented yet
+    return nullptr;
 }
