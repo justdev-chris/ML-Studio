@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QJsonDocument>
+#include <QCryptographicHash>
 
 ProjectSaver::ProjectSaver(QObject* parent)
     : QObject(parent) {}
@@ -41,9 +42,30 @@ bool ProjectSaver::save(const QString& filePath, Project* project) {
 
     emit progressUpdated(30);
 
+    // Copy audio files
+    emit statusMessage("Copying audio files...");
+    for (Track* track : project->getTracks()) {
+        for (int i = 0; i < track->getClipCount(); i++) {
+            Clip* clip = track->getClip(i);
+            if (clip->getType() == ClipType::Audio) {
+                AudioClip* audioClip = dynamic_cast<AudioClip*>(clip);
+                if (audioClip) {
+                    QString sourcePath = audioClip->getFilePath();
+                    if (!sourcePath.isEmpty() && QFile::exists(sourcePath)) {
+                        if (!copyAudioFile(sourcePath, audioDir)) {
+                            qWarning() << "Failed to copy audio file:" << sourcePath;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    emit progressUpdated(50);
+
     // Serialize project to JSON
     QJsonObject root = serializeProject(project);
-    emit progressUpdated(50);
+    emit progressUpdated(70);
 
     // Write JSON to file
     QJsonDocument doc(root);
@@ -57,29 +79,6 @@ bool ProjectSaver::save(const QString& filePath, Project* project) {
 
     file.write(data);
     file.close();
-
-    // Copy audio files
-    emit statusMessage("Copying audio files...");
-    emit progressUpdated(70);
-
-    for (Track* track : project->getTracks()) {
-        for (int i = 0; i < track->getClipCount(); i++) {
-            Clip* clip = track->getClip(i);
-            if (clip->getType() == ClipType::Audio) {
-                AudioClip* audioClip = dynamic_cast<AudioClip*>(clip);
-                if (audioClip) {
-                    QString sourcePath = audioClip->getFilePath();
-                    if (!sourcePath.isEmpty() && QFile::exists(sourcePath)) {
-                        QString destPath = audioDir + "/" + QFileInfo(sourcePath).fileName();
-                        if (!QFile::exists(destPath)) {
-                            QFile::copy(sourcePath, destPath);
-                            qDebug() << "Copied audio file:" << sourcePath << "->" << destPath;
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     project->setFilePath(filePath);
     project->markClean();
@@ -171,11 +170,13 @@ QJsonObject ProjectSaver::serializeTrack(Track* track) {
     }
     trackObj["clips"] = clipsArray;
 
-    // Inserts (placeholder)
-    trackObj["inserts"] = QJsonArray();
+    // Inserts
+    trackObj["inserts"] = serializeInserts(track);
 
-    // Sends (placeholder)
-    trackObj["sends"] = QJsonArray();
+    // Sends
+    QJsonArray sendsArray;
+    // TODO: Save sends
+    trackObj["sends"] = sendsArray;
 
     return trackObj;
 }
@@ -191,9 +192,10 @@ QJsonObject ProjectSaver::serializeAudioClip(Clip* clip) {
     if (audioClip) {
         clipObj["gain"] = audioClip->getGain();
         clipObj["pitch"] = audioClip->getPitch();
-        // Store relative path
+
         QString filePath = audioClip->getFilePath();
         if (!filePath.isEmpty()) {
+            // Store relative path to audio file
             QString relativePath = QFileInfo(filePath).fileName();
             clipObj["file"] = "audio/" + relativePath;
         }
@@ -230,8 +232,22 @@ QJsonObject ProjectSaver::serializeMIDIClip(Clip* clip) {
 
 QJsonObject ProjectSaver::serializeAutomation(Project* project) {
     QJsonObject automation;
-    // TODO: Implement automation serialization
-    Q_UNUSED(project);
+
+    // For each track
+    for (int trackIndex = 0; trackIndex < project->getTrackCount(); trackIndex++) {
+        QString trackKey = QString::number(trackIndex);
+        QJsonObject trackAuto;
+
+        // For each parameter
+        // (We need to get automation points from the project)
+        // For now, this is a placeholder
+        // In a real implementation, we'd iterate over m_automation in Project
+
+        if (!trackAuto.isEmpty()) {
+            automation[trackKey] = trackAuto;
+        }
+    }
+
     return automation;
 }
 
@@ -264,4 +280,57 @@ QJsonArray ProjectSaver::serializeRegions(Project* project) {
     }
 
     return regionsArray;
+}
+
+QJsonArray ProjectSaver::serializeInserts(Track* track) {
+    QJsonArray insertsArray;
+
+    // TODO: Get inserts from track and serialize them
+    // For now, return empty array
+
+    return insertsArray;
+}
+
+QString ProjectSaver::getRelativePath(const QString& absolutePath, const QString& baseDir) {
+    return QDir(baseDir).relativeFilePath(absolutePath);
+}
+
+bool ProjectSaver::copyAudioFile(const QString& sourcePath, const QString& destDir) {
+    QString fileName = QFileInfo(sourcePath).fileName();
+    QString destPath = destDir + "/" + fileName;
+
+    // If file already exists, check if it's the same file
+    if (QFile::exists(destPath)) {
+        // Compare file contents using hash
+        QFile src(sourcePath);
+        QFile dst(destPath);
+        if (src.open(QIODevice::ReadOnly) && dst.open(QIODevice::ReadOnly)) {
+            QCryptographicHash srcHash(QCryptographicHash::Sha1);
+            QCryptographicHash dstHash(QCryptographicHash::Sha1);
+            srcHash.addData(&src);
+            dstHash.addData(&dst);
+            if (srcHash.result() == dstHash.result()) {
+                return true; // Same file, no need to copy
+            }
+        }
+        // Different file with same name — generate unique name
+        destPath = generateUniqueFilename(fileName, destDir);
+    }
+
+    return QFile::copy(sourcePath, destPath);
+}
+
+QString ProjectSaver::generateUniqueFilename(const QString& baseName, const QString& destDir) {
+    QString name = QFileInfo(baseName).baseName();
+    QString ext = QFileInfo(baseName).suffix();
+    QString destPath;
+
+    int counter = 1;
+    do {
+        QString newName = name + "_" + QString::number(counter) + "." + ext;
+        destPath = destDir + "/" + newName;
+        counter++;
+    } while (QFile::exists(destPath));
+
+    return destPath;
 }
