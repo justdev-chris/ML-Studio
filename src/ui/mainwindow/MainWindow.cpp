@@ -1,6 +1,6 @@
 #include "MainWindow.h"
-#include "ui/dialogs/PreferencesDialog.h"
-#include "ui/dialogs/ExportDialog.h"
+#include "dialogs/PreferencesDialog.h"
+#include "dialogs/ExportDialog.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QStatusBar>
