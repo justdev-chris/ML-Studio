@@ -39,6 +39,19 @@ private:
     int m_blockSize = 256;
     bool m_initialized = false;
 
+    // Function pointers (CLAP)
+    using InitFunc = bool (*)(void* plugin);
+    using DestroyFunc = void (*)(void* plugin);
+    using ProcessFunc = bool (*)(void* plugin, void* processData);
+    using SetParamFunc = void (*)(void* plugin, int index, float value);
+    using GetParamFunc = float (*)(void* plugin, int index);
+
+    InitFunc m_init = nullptr;
+    DestroyFunc m_destroy = nullptr;
+    ProcessFunc m_process = nullptr;
+    SetParamFunc m_setParam = nullptr;
+    GetParamFunc m_getParam = nullptr;
+
     QMap<int, float> m_parameterCache;
 
 #ifdef _WIN32
