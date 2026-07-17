@@ -1,15 +1,13 @@
 #include "AudioEngine.h"
-#include "core/track/Clip.h"
 #include <QDebug>
 #include <QTimer>
-#include <QDateTime>
+#include <cmath>
 
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
     , m_transport(new Transport(this))
     , m_mixer(new Mixer(this)) {
-    m_timer = new QTimer(this);
-    connect(m_timer, &QTimer::timeout, this, &AudioEngine::updatePlayhead);
+    connectTransportSignals();
 }
 
 AudioEngine::~AudioEngine() {
@@ -25,54 +23,70 @@ bool AudioEngine::initialize(int sampleRate, int bufferSize) {
     m_sampleRate = sampleRate;
     m_bufferSize = bufferSize;
 
-    // Initialize mixer
     m_mixer->setSampleRate(sampleRate);
     m_mixer->setBufferSize(bufferSize);
 
-    // Setup default tracks
+    // Set up audio I/O if available
+    if (m_audioIO) {
+        m_audioIO->initialize(sampleRate, bufferSize, 2);
+        m_audioIO->setCallback([this](float** input, float** output, int numFrames) {
+            this->processAudio(input, output, 2, numFrames);
+        });
+    }
+
+    // Default tracks
     setupDefaultTracks();
 
     m_initialized = true;
-    m_timer->start(50); // Update playhead 20x per second
-
-    qDebug() << "AudioEngine initialized: " << sampleRate << "Hz, " << bufferSize << " samples";
+    qDebug() << "AudioEngine initialized:" << sampleRate << "Hz," << bufferSize << "samples";
     return true;
 }
 
 void AudioEngine::shutdown() {
     if (!m_initialized) return;
 
-    m_timer->stop();
-
-    for (Track* track : m_tracks) {
-        delete track;
+    if (m_audioIO) {
+        m_audioIO->shutdown();
     }
-    m_tracks.clear();
 
+    clearTracks();
     m_mixer->reset();
     m_initialized = false;
     qDebug() << "AudioEngine shutdown";
 }
 
+void AudioEngine::setAudioIO(AudioIO* audioIO) {
+    m_audioIO = audioIO;
+    if (m_initialized && m_audioIO) {
+        m_audioIO->initialize(m_sampleRate, m_bufferSize, 2);
+        m_audioIO->setCallback([this](float** input, float** output, int numFrames) {
+            this->processAudio(input, output, 2, numFrames);
+        });
+    }
+}
+
 void AudioEngine::play() {
     if (!m_initialized) return;
     m_transport->play();
+    if (m_audioIO && !m_audioIO->isRunning()) {
+        m_audioIO->start();
+    }
     emit transportStateChanged(true);
-    qDebug() << "AudioEngine: play";
 }
 
 void AudioEngine::stop() {
     if (!m_initialized) return;
     m_transport->stop();
+    if (m_audioIO && m_audioIO->isRunning()) {
+        m_audioIO->stop();
+    }
     emit transportStateChanged(false);
-    qDebug() << "AudioEngine: stop";
 }
 
 void AudioEngine::pause() {
     if (!m_initialized) return;
     m_transport->pause();
     emit transportStateChanged(false);
-    qDebug() << "AudioEngine: pause";
 }
 
 void AudioEngine::togglePlay() {
@@ -86,15 +100,20 @@ void AudioEngine::togglePlay() {
 void AudioEngine::record() {
     if (!m_initialized) return;
     m_transport->record();
+    if (m_transport->isRecording() && m_audioIO && !m_audioIO->isRunning()) {
+        m_audioIO->start();
+    }
     emit recordingStateChanged(m_transport->isRecording());
-    qDebug() << "AudioEngine: record";
 }
 
 void AudioEngine::setPosition(double seconds) {
     if (!m_initialized) return;
     m_transport->setPosition(seconds);
-    m_currentTime = seconds;
-    emit positionChanged(seconds);
+}
+
+void AudioEngine::setTempo(double bpm) {
+    if (!m_initialized) return;
+    m_transport->setTempo(bpm);
 }
 
 Track* AudioEngine::addTrack(TrackType type) {
@@ -102,7 +121,6 @@ Track* AudioEngine::addTrack(TrackType type) {
     track->setName(QString("Track %1").arg(m_tracks.size() + 1));
     m_tracks.append(track);
     emit trackAdded(track);
-    qDebug() << "AudioEngine: added track " << track->getName();
     return track;
 }
 
@@ -112,12 +130,20 @@ void AudioEngine::removeTrack(int index) {
     m_tracks.removeAt(index);
     delete track;
     emit trackRemoved(index);
-    qDebug() << "AudioEngine: removed track " << index;
 }
 
 Track* AudioEngine::getTrack(int index) const {
     if (index < 0 || index >= m_tracks.size()) return nullptr;
     return m_tracks.at(index);
+}
+
+void AudioEngine::setTracks(const QVector<Track*>& tracks) {
+    clearTracks();
+    m_tracks = tracks;
+    for (Track* track : m_tracks) {
+        track->setParent(this);
+        emit trackAdded(track);
+    }
 }
 
 void AudioEngine::setMasterVolume(float volume) {
@@ -128,66 +154,155 @@ float AudioEngine::getMasterVolume() const {
     return m_mixer->getMasterVolume();
 }
 
-void AudioEngine::setAudioDevice(const QString& device) {
-    // TODO: Implement PortAudio device selection
-    Q_UNUSED(device);
+void AudioEngine::setProject(Project* project) {
+    m_project = project;
+    if (m_project) {
+        loadProject(m_project);
+    }
 }
 
-QStringList AudioEngine::getAudioDevices() const {
-    // TODO: Implement PortAudio device enumeration
-    return QStringList();
+void AudioEngine::loadProject(Project* project) {
+    if (!project) return;
+
+    clearTracks();
+
+    // Copy tracks from project
+    for (Track* track : project->getTracks()) {
+        Track* newTrack = new Track(track->getType(), m_sampleRate, this);
+        newTrack->setName(track->getName());
+        newTrack->setColor(track->getColor());
+        newTrack->setVolume(track->getVolume());
+        newTrack->setPan(track->getPan());
+        newTrack->setMuted(track->isMuted());
+        newTrack->setSoloed(track->isSoloed());
+        newTrack->setRecordArmed(track->isRecordArmed());
+
+        // Copy clips
+        for (int i = 0; i < track->getClipCount(); i++) {
+            Clip* clip = track->getClip(i);
+            if (clip->getType() == ClipType::Audio) {
+                AudioClip* audioClip = dynamic_cast<AudioClip*>(clip);
+                if (audioClip) {
+                    AudioClip* newClip = new AudioClip(newTrack);
+                    newClip->setName(audioClip->getName());
+                    newClip->setStart(audioClip->getStart());
+                    newClip->setLength(audioClip->getLength());
+                    newClip->setGain(audioClip->getGain());
+                    newClip->setPitch(audioClip->getPitch());
+                    // Load audio file
+                    newClip->loadFromFile(audioClip->getFilePath());
+                    newTrack->addClip(newClip);
+                }
+            } else if (clip->getType() == ClipType::MIDI) {
+                MIDIClip* midiClip = dynamic_cast<MIDIClip*>(clip);
+                if (midiClip) {
+                    MIDIClip* newClip = new MIDIClip(newTrack);
+                    newClip->setName(midiClip->getName());
+                    newClip->setStart(midiClip->getStart());
+                    newClip->setLength(midiClip->getLength());
+                    for (const MIDIEvent& event : midiClip->getEvents()) {
+                        newClip->addEvent(event);
+                    }
+                    newTrack->addClip(newClip);
+                }
+            }
+        }
+
+        m_tracks.append(newTrack);
+        emit trackAdded(newTrack);
+    }
+
+    m_project = project;
+    emit projectLoaded();
+}
+
+void AudioEngine::clearProject() {
+    clearTracks();
+    m_project = nullptr;
+    emit projectCleared();
+}
+
+void AudioEngine::clearTracks() {
+    for (Track* track : m_tracks) {
+        delete track;
+    }
+    m_tracks.clear();
+}
+
+void AudioEngine::processAudio(float** input, float** output, int numChannels, int numFrames) {
+    if (!m_initialized) return;
+    if (numFrames <= 0) return;
+
+    QMutexLocker locker(&m_mutex);
+
+    // Clear output buffers
+    for (int c = 0; c < numChannels; c++) {
+        if (output[c]) {
+            memset(output[c], 0, numFrames * sizeof(float));
+        }
+    }
+
+    // Process each track
+    for (Track* track : m_tracks) {
+        if (track->isMuted()) continue;
+
+        // Allocate track buffers
+        float* trackBuffer[2] = {nullptr, nullptr};
+        trackBuffer[0] = new float[numFrames];
+        trackBuffer[1] = new float[numFrames];
+        memset(trackBuffer[0], 0, numFrames * sizeof(float));
+        memset(trackBuffer[1], 0, numFrames * sizeof(float));
+
+        // Process track
+        track->process(trackBuffer, numFrames);
+
+        // Mix into output
+        m_mixer->mixTrack(trackBuffer, output, numFrames, track->getVolume(), track->getPan());
+
+        delete[] trackBuffer[0];
+        delete[] trackBuffer[1];
+    }
+
+    // Update playhead position
+    if (m_transport->isPlaying()) {
+        m_transport->updatePosition();
+    }
 }
 
 void AudioEngine::setupDefaultTracks() {
-    // Create a default audio track
     Track* track = addTrack(TrackType::Audio);
     track->setName("Track 1");
     track->setColor(QColor(70, 130, 180));
 
-    // Add a second track for MIDI
     Track* midiTrack = addTrack(TrackType::MIDI);
     midiTrack->setName("MIDI Track");
     midiTrack->setColor(QColor(180, 130, 70));
 }
 
-void AudioEngine::processAudio(float** output, int numFrames) {
-    if (!m_initialized) return;
-    if (numFrames <= 0) return;
-
-    m_mutex.lock();
-
-    // Clear output buffer
-    for (int i = 0; i < 2; i++) {
-        if (output[i]) {
-            memset(output[i], 0, numFrames * sizeof(float));
-        }
-    }
-
-    // Process all tracks
-    for (Track* track : m_tracks) {
-        if (!track->isMuted()) {
-            float* trackBuffer[2] = { nullptr, nullptr };
-            // Allocate temporary buffer for track processing
-            // TODO: Use pre-allocated buffers for efficiency
-            track->process(trackBuffer, numFrames);
-            m_mixer->mixTrack(trackBuffer, output, numFrames, track->getVolume(), track->getPan());
-            // Cleanup
-            if (trackBuffer[0]) delete[] trackBuffer[0];
-            if (trackBuffer[1]) delete[] trackBuffer[1];
-        }
-    }
-
-    m_mutex.unlock();
+void AudioEngine::connectTransportSignals() {
+    connect(m_transport, &Transport::positionChanged,
+            this, &AudioEngine::onTransportPositionChanged);
+    connect(m_transport, &Transport::playStateChanged,
+            this, &AudioEngine::onTransportPlayStateChanged);
+    connect(m_transport, &Transport::recordStateChanged,
+            this, &AudioEngine::onTransportRecordStateChanged);
+    connect(m_transport, &Transport::tempoChanged,
+            this, &AudioEngine::onTransportTempoChanged);
 }
 
-void AudioEngine::updatePlayhead() {
-    if (!m_initialized || !m_transport->isPlaying()) return;
+void AudioEngine::onTransportPositionChanged(double seconds) {
+    emit positionChanged(seconds);
+    emit playheadMoved(seconds);
+}
 
-    double position = m_transport->getPosition();
-    emit positionChanged(position);
+void AudioEngine::onTransportPlayStateChanged(bool playing) {
+    emit transportStateChanged(playing);
+}
 
-    // Update track clip positions if needed
-    for (Track* track : m_tracks) {
-        track->updateClips(position);
-    }
+void AudioEngine::onTransportRecordStateChanged(bool recording) {
+    emit recordingStateChanged(recording);
+}
+
+void AudioEngine::onTransportTempoChanged(double bpm) {
+    emit tempoChanged(bpm);
 }
