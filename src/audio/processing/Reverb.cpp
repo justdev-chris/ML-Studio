@@ -1,7 +1,6 @@
 #include "Reverb.h"
-#include <algorithm>
 #include <cmath>
-#include <random>
+#include <algorithm>
 
 Reverb::Reverb() {
     m_delayLines.resize(NUM_COMB_FILTERS + NUM_ALLPASS_FILTERS);
@@ -29,17 +28,16 @@ void Reverb::process(float** inputs, float** outputs, int numChannels, int numFr
         for (int i = 0; i < numFrames; i++) {
             float input = output[i];
 
-            // Predelay
+            // Predelay buffer
             m_predelaySamples = static_cast<int>(m_predelayMs * m_sampleRate / 1000.0f);
             if (m_predelaySamples > 0) {
-                // Simple predelay buffer
-                static std::deque<float> predelayBuffer;
-                predelayBuffer.push_back(input);
-                if (predelayBuffer.size() > m_predelaySamples) {
-                    input = predelayBuffer.front();
-                    predelayBuffer.pop_front();
-                } else {
+                if (m_predelayBuffer.size() < static_cast<size_t>(m_predelaySamples)) {
+                    m_predelayBuffer.push_back(input);
                     input = 0.0f;
+                } else {
+                    input = m_predelayBuffer.front();
+                    m_predelayBuffer.pop_front();
+                    m_predelayBuffer.push_back(input);
                 }
             }
 
@@ -51,32 +49,35 @@ void Reverb::process(float** inputs, float** outputs, int numChannels, int numFr
                 if (line.delaySamples > 0 && !line.buffer.empty()) {
                     float sample = line.buffer.front();
                     line.buffer.pop_front();
-                    float outputSample = sample;
+
+                    // Low-pass damping
                     float filterState = m_filterStates[d];
-                    // Simple low-pass damping
-                    filterState += m_damping * (outputSample - filterState);
+                    filterState += m_damping * (sample - filterState);
                     m_filterStates[d] = filterState;
-                    outputSample = filterState;
+                    sample = filterState;
+
                     // Feedback
-                    line.buffer.push_back(input + outputSample * 0.7f);
-                    // Keep buffer size
-                    while (line.buffer.size() > line.delaySamples) {
+                    line.buffer.push_back(input + sample * 0.7f);
+
+                    while (line.buffer.size() > static_cast<size_t>(line.delaySamples)) {
                         line.buffer.pop_front();
                     }
-                    wet += outputSample;
+                    wet += sample;
                 }
             }
 
-            // Allpass filters (simplified)
+            // Allpass filters
             int allpassOffset = NUM_COMB_FILTERS;
             for (int d = 0; d < NUM_ALLPASS_FILTERS; d++) {
                 DelayLine& line = m_delayLines[allpassOffset + d];
                 if (line.delaySamples > 0 && !line.buffer.empty()) {
                     float sample = line.buffer.front();
                     line.buffer.pop_front();
+
                     float outputSample = -sample + input * 0.5f;
                     line.buffer.push_back(input + sample * 0.5f);
-                    while (line.buffer.size() > line.delaySamples) {
+
+                    while (line.buffer.size() > static_cast<size_t>(line.delaySamples)) {
                         line.buffer.pop_front();
                     }
                     input = outputSample;
@@ -96,6 +97,7 @@ void Reverb::reset() {
     for (auto& line : m_delayLines) {
         line.buffer.clear();
     }
+    m_predelayBuffer.clear();
     std::fill(m_filterStates.begin(), m_filterStates.end(), 0.0f);
 }
 
@@ -147,7 +149,6 @@ float Reverb::getParameterDefault(int index) const {
 }
 
 void Reverb::updateDelayLines() {
-    // Prime numbers for comb filter delays
     static const int combDelays[NUM_COMB_FILTERS] = {
         1111, 1187, 1277, 1319, 1423, 1481, 1553, 1601
     };
@@ -169,4 +170,8 @@ void Reverb::updateDelayLines() {
         m_delayLines[NUM_COMB_FILTERS + i].delaySamples = delay;
         m_delayLines[NUM_COMB_FILTERS + i].buffer.assign(delay, 0.0f);
     }
+
+    // Update predelay
+    m_predelaySamples = static_cast<int>(m_predelayMs * sampleRate / 1000.0f);
+    m_predelayBuffer.assign(m_predelaySamples, 0.0f);
 }
