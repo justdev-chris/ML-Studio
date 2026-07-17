@@ -4,10 +4,6 @@
 #include "plugins/host/PluginHost.h"
 #include <QString>
 #include <QMap>
-#include <vector>
-
-// Forward declarations (VST3 SDK types)
-struct VST3Plugin;
 
 class VST3Host : public PluginInstance {
 public:
@@ -39,26 +35,16 @@ public:
 private:
     bool loadPlugin();
     void unloadPlugin();
-    bool setupAudioProcessing();
 
     PluginInfo m_info;
-    void* m_handle = nullptr;           // Shared library handle
-    void* m_plugin = nullptr;           // VST3 component instance
-    void* m_processor = nullptr;        // VST3 audio processor
-    void* m_controller = nullptr;       // VST3 edit controller
+    void* m_handle = nullptr;
+    void* m_processor = nullptr;
+    void* m_controller = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
     bool m_initialized = false;
 
-    // Plugin function pointers
-    using CreateFunc = void* (*)();
-    using DeleteFunc = void (*)(void*);
-
-    CreateFunc m_createFunc = nullptr;
-    DeleteFunc m_deleteFunc = nullptr;
-
-    // Parameter cache
     QMap<int, float> m_parameterCache;
 
 #ifdef _WIN32
