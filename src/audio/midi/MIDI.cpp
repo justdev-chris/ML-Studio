@@ -1,39 +1,13 @@
 #include "MIDI.h"
 #include <QDebug>
-#include <QThread>
-
-#ifdef _WIN32
-    #include <windows.h>
-    #include <mmsystem.h>
-#else
-    #include <sys/time.h>
-#endif
 
 // RtMidi headers
 #include <RtMidi.h>
 
-bool MIDIMessage::isValid() const {
-    return type >= 0x80 && type <= 0xFF;
-}
-
-QString MIDIMessage::toString() const {
-    QString result;
-    switch (type) {
-        case NoteOff: result = "NoteOff"; break;
-        case NoteOn: result = "NoteOn"; break;
-        case PolyPressure: result = "PolyPressure"; break;
-        case ControlChange: result = "ControlChange"; break;
-        case ProgramChange: result = "ProgramChange"; break;
-        case ChannelPressure: result = "ChannelPressure"; break;
-        case PitchBend: result = "PitchBend"; break;
-        case SystemExclusive: result = "SysEx"; break;
-        default: result = "Unknown"; break;
-    }
-    return QString("%1 ch%2 d1=%3 d2=%4").arg(result).arg(channel).arg(data1).arg(data2);
-}
-
 MIDI::MIDI(QObject* parent)
-    : QObject(parent) {
+    : QObject(parent)
+    , m_midiIn(nullptr)
+    , m_midiOut(nullptr) {
 }
 
 MIDI::~MIDI() {
@@ -41,10 +15,7 @@ MIDI::~MIDI() {
 }
 
 bool MIDI::initialize() {
-    if (m_initialized) {
-        qWarning() << "MIDI already initialized";
-        return true;
-    }
+    if (m_initialized) return true;
 
     try {
         m_midiIn = new RtMidiIn();
@@ -53,7 +24,7 @@ bool MIDI::initialize() {
         qDebug() << "MIDI initialized";
         return true;
     } catch (const std::exception& e) {
-        qCritical() << "MIDI init error: " << e.what();
+        qCritical() << "MIDI init error:" << e.what();
         emit error(QString("MIDI: %1").arg(e.what()));
         return false;
     }
@@ -91,10 +62,10 @@ bool MIDI::openInput(int portIndex) {
         m_inputOpen = true;
         m_currentInputDevice = QString::fromStdString(midiIn->getPortName(portIndex));
         emit inputOpened(m_currentInputDevice);
-        qDebug() << "MIDI input opened: " << m_currentInputDevice;
+        qDebug() << "MIDI input opened:" << m_currentInputDevice;
         return true;
     } catch (const std::exception& e) {
-        qCritical() << "MIDI input error: " << e.what();
+        qCritical() << "MIDI input error:" << e.what();
         emit error(QString("MIDI input: %1").arg(e.what()));
         return false;
     }
@@ -129,10 +100,10 @@ bool MIDI::openOutput(int portIndex) {
         m_outputOpen = true;
         m_currentOutputDevice = QString::fromStdString(midiOut->getPortName(portIndex));
         emit outputOpened(m_currentOutputDevice);
-        qDebug() << "MIDI output opened: " << m_currentOutputDevice;
+        qDebug() << "MIDI output opened:" << m_currentOutputDevice;
         return true;
     } catch (const std::exception& e) {
-        qCritical() << "MIDI output error: " << e.what();
+        qCritical() << "MIDI output error:" << e.what();
         emit error(QString("MIDI output: %1").arg(e.what()));
         return false;
     }
@@ -190,12 +161,10 @@ bool MIDI::sendMessage(const MIDIMessage& message) {
 
     QByteArray data;
     if (message.type >= 0xF0) {
-        // System message
         data.append(message.type);
         data.append(message.data1);
         data.append(message.data2);
     } else {
-        // Channel message
         data.append((message.type & 0xF0) | (message.channel & 0x0F));
         data.append(message.data1 & 0x7F);
         data.append(message.data2 & 0x7F);
@@ -256,42 +225,6 @@ bool MIDI::sendPitchBend(int channel, int value) {
     return sendMessage(msg);
 }
 
-bool MIDI::sendSystemExclusive(const QByteArray& data) {
-    if (!m_outputOpen || !m_midiOut) return false;
-    try {
-        auto* midiOut = static_cast<RtMidiOut*>(m_midiOut);
-        midiOut->sendMessage(reinterpret_cast<const unsigned char*>(data.constData()), data.size());
-        return true;
-    } catch (const std::exception& e) {
-        emit error(QString("MIDI SysEx: %1").arg(e.what()));
-        return false;
-    }
-}
-
-void MIDI::sendClock() {
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Clock;
-    sendMessage(msg);
-}
-
-void MIDI::sendStart() {
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Start;
-    sendMessage(msg);
-}
-
-void MIDI::sendContinue() {
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Continue;
-    sendMessage(msg);
-}
-
-void MIDI::sendStop() {
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Stop;
-    sendMessage(msg);
-}
-
 void MIDI::processInputMessage(const QByteArray& data, int timestamp) {
     if (data.size() < 1) return;
 
@@ -300,12 +233,10 @@ void MIDI::processInputMessage(const QByteArray& data, int timestamp) {
 
     unsigned char status = data[0];
     if (status >= 0xF0) {
-        // System message
         msg.type = static_cast<MIDIMessage::Type>(status);
         if (data.size() > 1) msg.data1 = data[1];
         if (data.size() > 2) msg.data2 = data[2];
     } else {
-        // Channel message
         msg.type = static_cast<MIDIMessage::Type>(status & 0xF0);
         msg.channel = status & 0x0F;
         if (data.size() > 1) msg.data1 = data[1];
@@ -316,10 +247,18 @@ void MIDI::processInputMessage(const QByteArray& data, int timestamp) {
         m_callback(msg);
     }
     emit messageReceived(msg);
+
+    // Forward to PianoRoll if connected
+    if (msg.type == MIDIMessage::NoteOn && msg.data2 > 0) {
+        emit noteOnReceived(msg.data1, msg.data2);
+    } else if (msg.type == MIDIMessage::NoteOn && msg.data2 == 0) {
+        emit noteOffReceived(msg.data1);
+    } else if (msg.type == MIDIMessage::NoteOff) {
+        emit noteOffReceived(msg.data1);
+    }
 }
 
 void MIDI::midiInputCallback(double timeStamp, const unsigned char* message, size_t size, void* userData) {
-    Q_UNUSED(timeStamp);
     auto* midi = static_cast<MIDI*>(userData);
     if (!midi) return;
 
