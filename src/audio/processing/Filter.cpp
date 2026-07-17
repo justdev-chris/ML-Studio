@@ -1,5 +1,4 @@
 #include "Filter.h"
-#include <algorithm>
 #include <cmath>
 
 Filter::Filter() {
@@ -38,7 +37,6 @@ void Filter::reset() {
 void Filter::setParameter(int index, float value) {
     switch (index) {
         case 0: {
-            // Type selector (0-6 mapped to enum)
             int typeIndex = static_cast<int>(value * 6.99f);
             if (typeIndex < 0) typeIndex = 0;
             if (typeIndex > 6) typeIndex = 6;
@@ -89,23 +87,26 @@ float Filter::getParameterMax(int index) const { return 1.0f; }
 
 float Filter::getParameterDefault(int index) const {
     switch (index) {
-        case 0: return 0.0f; // LowPass
-        case 1: return 0.05f; // 1000Hz
-        case 2: return 0.06f; // 0.707
-        case 3: return 0.5f; // 0dB
+        case 0: return 0.0f;
+        case 1: return 0.05f;
+        case 2: return 0.06f;
+        case 3: return 0.5f;
         default: return 0.0f;
     }
 }
 
 void Filter::updateFilters() {
     MathUtils::Biquad::Type biquadType = mapType(m_type);
+    float sampleRate = m_sampleRate > 0 ? m_sampleRate : 44100.0f;
 
     for (auto& channel : m_channels) {
-        // In a real implementation, we'd pass the actual parameters to the biquad
-        // For now, just mark as active
         channel.active = true;
         channel.filter.setType(biquadType);
-        // TODO: Actually implement biquad coefficient calculation
+        channel.filter.setFrequency(m_frequency);
+        channel.filter.setQ(m_q);
+        channel.filter.setGain(m_gain);
+        channel.filter.setSampleRate(sampleRate);
+        channel.filter.updateCoefficients();
     }
 }
 
