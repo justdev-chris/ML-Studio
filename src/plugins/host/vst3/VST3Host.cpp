@@ -1,13 +1,22 @@
 #include "VST3Host.h"
 #include <QDebug>
 #include <QFile>
-#include <QCoreApplication>
+#include <QDir>
+#include <cstring>
 
 #ifdef _WIN32
     #include <windows.h>
 #else
     #include <dlfcn.h>
 #endif
+
+// VST3 SDK forward declarations (minimal)
+#define DECLARE_CLASS_IID(className, iid) \
+    static const char* const IID_##className = iid;
+
+DECLARE_CLASS_IID(IComponent, "00000000-0000-0000-0000-000000000001")
+DECLARE_CLASS_IID(IAudioProcessor, "00000000-0000-0000-0000-000000000002")
+DECLARE_CLASS_IID(IEditController, "00000000-0000-0000-0000-000000000003")
 
 VST3Host::VST3Host(const PluginInfo& info)
     : m_info(info) {
@@ -28,16 +37,9 @@ bool VST3Host::initialize(double sampleRate, int blockSize) {
         return false;
     }
 
-    // Initialize plugin with sample rate and block size
-    if (m_processor) {
-        // In a real VST3 implementation, you'd call IAudioProcessor::setupProcessing()
-        qDebug() << "VST3 plugin initialized:" << m_info.name;
-        m_initialized = true;
-        return true;
-    }
-
-    unloadPlugin();
-    return false;
+    m_initialized = true;
+    qDebug() << "VST3 plugin initialized:" << m_info.name;
+    return true;
 }
 
 void VST3Host::shutdown() {
@@ -58,12 +60,12 @@ void VST3Host::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
-    // In a real VST3 implementation:
+    // In a real VST3 implementation, we would:
     // 1. Copy inputs to VST3 buffers
     // 2. Call IAudioProcessor::process()
     // 3. Copy outputs back
 
-    // Placeholder: passthrough
+    // For now: passthrough
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (inputs[c] && outputs[c] && inputs[c] != outputs[c]) {
             memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
@@ -115,7 +117,6 @@ bool VST3Host::loadPlugin() {
     // Handle VST3 bundle structure
     QFileInfo info(path);
     if (info.isDir()) {
-        // Look for the actual library inside the bundle
         QDir dir(path);
 #ifdef _WIN32
         QStringList subDirs = {"x86_64-win", "win64", "x64"};
@@ -164,12 +165,34 @@ bool VST3Host::loadPlugin() {
         return false;
     }
 
-    // In a real VST3 implementation:
-    // 1. Call getFactory() to get the factory object
-    // 2. Create the plugin component
-    // 3. Get the audio processor
+    // Get create instance function
+    m_createInstance = (CreateInstanceFunc)GetProcAddress((HMODULE)m_handle, "createInstance");
+    if (!m_createInstance) {
+        qWarning() << "Failed to get createInstance";
+        return false;
+    }
 
-    m_processor = (void*)1; // Placeholder
+    // Create component
+    m_component = m_createInstance(IID_IComponent, IID_IComponent);
+    if (!m_component) {
+        qWarning() << "Failed to create IComponent";
+        return false;
+    }
+
+    // Create audio processor
+    m_processor = m_createInstance(IID_IAudioProcessor, IID_IAudioProcessor);
+    if (!m_processor) {
+        qWarning() << "Failed to create IAudioProcessor";
+        return false;
+    }
+
+    // Create controller
+    m_controller = m_createInstance(IID_IEditController, IID_IEditController);
+    if (m_controller) {
+        // Initialize controller
+        qDebug() << "VST3 controller created";
+    }
+
     return true;
 
 #else
@@ -187,7 +210,33 @@ bool VST3Host::loadPlugin() {
         return false;
     }
 
-    m_processor = (void*)1; // Placeholder
+    // Get create instance function
+    m_createInstance = (CreateInstanceFunc)dlsym(m_handle, "createInstance");
+    if (!m_createInstance) {
+        qWarning() << "Failed to get createInstance:" << dlerror();
+        return false;
+    }
+
+    // Create component
+    m_component = m_createInstance(IID_IComponent, IID_IComponent);
+    if (!m_component) {
+        qWarning() << "Failed to create IComponent";
+        return false;
+    }
+
+    // Create audio processor
+    m_processor = m_createInstance(IID_IAudioProcessor, IID_IAudioProcessor);
+    if (!m_processor) {
+        qWarning() << "Failed to create IAudioProcessor";
+        return false;
+    }
+
+    // Create controller
+    m_controller = m_createInstance(IID_IEditController, IID_IEditController);
+    if (m_controller) {
+        qDebug() << "VST3 controller created";
+    }
+
     return true;
 #endif
 }
@@ -202,4 +251,7 @@ void VST3Host::unloadPlugin() {
         m_handle = nullptr;
     }
     m_processor = nullptr;
+    m_controller = nullptr;
+    m_component = nullptr;
+    m_createInstance = nullptr;
 }
