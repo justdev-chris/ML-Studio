@@ -2,11 +2,11 @@
 #include "Project.h"
 #include "core/track/Track.h"
 #include "core/track/Clip.h"
-
+#include "utils/FileUtils.h"
+#include <QFile>
+#include <QDir>
 #include <QDebug>
 #include <QJsonDocument>
-#include <QFileInfo>
-#include <QDateTime>
 
 ProjectSaver::ProjectSaver(QObject* parent)
     : QObject(parent) {}
@@ -22,9 +22,30 @@ bool ProjectSaver::save(const QString& filePath, Project* project) {
     emit statusMessage("Saving project...");
     emit progressUpdated(10);
 
+    // Create project directory if needed
+    QDir projectDir = QFileInfo(filePath).absoluteDir();
+    if (!projectDir.exists()) {
+        if (!projectDir.mkpath(".")) {
+            m_lastError = "Could not create project directory: " + projectDir.path();
+            return false;
+        }
+    }
+
+    // Create audio directory
+    QString audioDir = projectDir.path() + "/audio";
+    if (!QDir(audioDir).exists()) {
+        if (!QDir().mkdir(audioDir)) {
+            qWarning() << "Could not create audio directory:" << audioDir;
+        }
+    }
+
+    emit progressUpdated(30);
+
+    // Serialize project to JSON
     QJsonObject root = serializeProject(project);
     emit progressUpdated(50);
 
+    // Write JSON to file
     QJsonDocument doc(root);
     QByteArray data = doc.toJson(QJsonDocument::Indented);
 
@@ -36,6 +57,29 @@ bool ProjectSaver::save(const QString& filePath, Project* project) {
 
     file.write(data);
     file.close();
+
+    // Copy audio files
+    emit statusMessage("Copying audio files...");
+    emit progressUpdated(70);
+
+    for (Track* track : project->getTracks()) {
+        for (int i = 0; i < track->getClipCount(); i++) {
+            Clip* clip = track->getClip(i);
+            if (clip->getType() == ClipType::Audio) {
+                AudioClip* audioClip = dynamic_cast<AudioClip*>(clip);
+                if (audioClip) {
+                    QString sourcePath = audioClip->getFilePath();
+                    if (!sourcePath.isEmpty() && QFile::exists(sourcePath)) {
+                        QString destPath = audioDir + "/" + QFileInfo(sourcePath).fileName();
+                        if (!QFile::exists(destPath)) {
+                            QFile::copy(sourcePath, destPath);
+                            qDebug() << "Copied audio file:" << sourcePath << "->" << destPath;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     project->setFilePath(filePath);
     project->markClean();
@@ -83,8 +127,7 @@ QJsonObject ProjectSaver::serializeSettings(Project* project) {
     settings["sampleRate"] = project->getSampleRate();
     settings["bitDepth"] = project->getBitDepth();
     settings["bpm"] = project->getTransport()->getTempo();
-    settings["beats"] = project->getTransport()->getBeats();
-    settings["noteValue"] = project->getTransport()->getNoteValue();
+    settings["timeSignature"] = QJsonArray({project->getTransport()->getBeats(), project->getTransport()->getNoteValue()});
     return settings;
 }
 
@@ -111,15 +154,9 @@ QJsonObject ProjectSaver::serializeTrack(Track* track) {
     trackObj["recordArm"] = track->isRecordArmed();
 
     switch (track->getType()) {
-        case TrackType::Audio:
-            trackObj["type"] = "audio";
-            break;
-        case TrackType::MIDI:
-            trackObj["type"] = "midi";
-            break;
-        case TrackType::Aux:
-            trackObj["type"] = "aux";
-            break;
+        case TrackType::Audio: trackObj["type"] = "audio"; break;
+        case TrackType::MIDI: trackObj["type"] = "midi"; break;
+        case TrackType::Aux: trackObj["type"] = "aux"; break;
     }
 
     // Clips
@@ -135,12 +172,10 @@ QJsonObject ProjectSaver::serializeTrack(Track* track) {
     trackObj["clips"] = clipsArray;
 
     // Inserts (placeholder)
-    QJsonArray inserts;
-    trackObj["inserts"] = inserts;
+    trackObj["inserts"] = QJsonArray();
 
     // Sends (placeholder)
-    QJsonArray sends;
-    trackObj["sends"] = sends;
+    trackObj["sends"] = QJsonArray();
 
     return trackObj;
 }
@@ -156,7 +191,12 @@ QJsonObject ProjectSaver::serializeAudioClip(Clip* clip) {
     if (audioClip) {
         clipObj["gain"] = audioClip->getGain();
         clipObj["pitch"] = audioClip->getPitch();
-        clipObj["file"] = audioClip->getFilePath();
+        // Store relative path
+        QString filePath = audioClip->getFilePath();
+        if (!filePath.isEmpty()) {
+            QString relativePath = QFileInfo(filePath).fileName();
+            clipObj["file"] = "audio/" + relativePath;
+        }
     }
 
     return clipObj;
@@ -191,6 +231,7 @@ QJsonObject ProjectSaver::serializeMIDIClip(Clip* clip) {
 QJsonObject ProjectSaver::serializeAutomation(Project* project) {
     QJsonObject automation;
     // TODO: Implement automation serialization
+    Q_UNUSED(project);
     return automation;
 }
 
@@ -223,9 +264,4 @@ QJsonArray ProjectSaver::serializeRegions(Project* project) {
     }
 
     return regionsArray;
-}
-
-QString ProjectSaver::getRelativePath(const QString& absolutePath) {
-    // TODO: Implement proper path relativization
-    return absolutePath;
 }
