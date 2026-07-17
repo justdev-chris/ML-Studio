@@ -34,7 +34,7 @@ struct MIDIMessage {
     int channel = 0;
     int data1 = 0;
     int data2 = 0;
-    int timestamp = 0; // in milliseconds
+    int timestamp = 0;
 
     bool isValid() const;
     QString toString() const;
@@ -51,43 +51,33 @@ public:
     void shutdown();
     bool isInitialized() const { return m_initialized; }
 
-    // Input
     bool openInput(int portIndex);
     bool openInput(const QString& deviceName);
     void closeInput();
     bool isInputOpen() const { return m_inputOpen; }
 
-    // Output
     bool openOutput(int portIndex);
     bool openOutput(const QString& deviceName);
     void closeOutput();
     bool isOutputOpen() const { return m_outputOpen; }
 
-    // Device lists
     QVector<QString> getInputDevices() const;
     QVector<QString> getOutputDevices() const;
 
-    // Send MIDI
     bool sendMessage(const MIDIMessage& message);
     bool sendNoteOn(int channel, int note, int velocity);
     bool sendNoteOff(int channel, int note, int velocity = 0);
     bool sendControlChange(int channel, int controller, int value);
     bool sendProgramChange(int channel, int program);
     bool sendPitchBend(int channel, int value);
-    bool sendSystemExclusive(const QByteArray& data);
 
-    // Receive MIDI
     using MIDICallback = std::function<void(const MIDIMessage&)>;
     void setCallback(MIDICallback callback) { m_callback = callback; }
 
-    // Synchronization
-    void sendClock();
-    void sendStart();
-    void sendContinue();
-    void sendStop();
-
 signals:
     void messageReceived(const MIDIMessage& message);
+    void noteOnReceived(int note, int velocity);
+    void noteOffReceived(int note);
     void inputOpened(const QString& device);
     void outputOpened(const QString& device);
     void error(const QString& message);
@@ -103,13 +93,10 @@ private:
     MIDICallback m_callback;
     mutable QMutex m_mutex;
 
-    // RtMidi specific
     void* m_midiIn = nullptr;
     void* m_midiOut = nullptr;
 
     void processInputMessage(const QByteArray& data, int timestamp);
-    void onMidiError(const QString& message);
-
     static void midiInputCallback(double timeStamp, const unsigned char* message, size_t size, void* userData);
 };
 
