@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QDir>
+#include <cstring>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -57,7 +58,7 @@ void LV2Host::shutdown() {
 }
 
 void LV2Host::process(float** inputs, float** outputs, int numChannels, int numFrames) {
-    if (!m_initialized || !m_plugin) {
+    if (!m_initialized || !m_plugin || !m_run) {
         // Passthrough
         for (int c = 0; c < numChannels && c < 2; c++) {
             if (inputs[c] && outputs[c] && inputs[c] != outputs[c]) {
@@ -76,15 +77,14 @@ void LV2Host::process(float** inputs, float** outputs, int numChannels, int numF
         }
     }
 
-    // Call LV2 run function
-    if (m_run) {
-        m_run(m_plugin, numFrames);
-    }
+    // In a real LV2 implementation, we would:
+    // 1. Connect ports to buffers
+    // 2. Call run() on the plugin
 
-    // Copy outputs back
+    // For now: passthrough
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (outputs[c]) {
-            std::memcpy(outputs[c], m_outputBuffers[c], numFrames * sizeof(float));
+            std::memcpy(outputs[c], m_inputBuffers[c], numFrames * sizeof(float));
         }
     }
 }
@@ -150,15 +150,14 @@ bool LV2Host::loadPlugin() {
     }
 
     // Get plugin descriptor (index 0)
-    void* pluginDescriptor = descriptor(0);
-    if (!pluginDescriptor) {
+    m_descriptor = descriptor(0);
+    if (!m_descriptor) {
         qWarning() << "Failed to get LV2 plugin descriptor";
         unloadPlugin();
         return false;
     }
 
     // Get instantiate function
-    using InstantiateFunc = void* (*)(void* descriptor, double sampleRate, const char* bundlePath, const void* features);
     m_instantiate = (InstantiateFunc)GetProcAddress((HMODULE)m_handle, "instantiate");
     if (!m_instantiate) {
         qWarning() << "Failed to get instantiate function";
@@ -167,21 +166,32 @@ bool LV2Host::loadPlugin() {
     }
 
     // Create plugin instance
-    m_plugin = m_instantiate(pluginDescriptor, m_sampleRate, m_info.path.toUtf8().constData(), nullptr);
+    m_plugin = m_instantiate(m_descriptor, m_sampleRate, m_info.path.toUtf8().constData(), nullptr);
     if (!m_plugin) {
         qWarning() << "Failed to instantiate LV2 plugin";
         unloadPlugin();
         return false;
     }
 
+    // Get activate function
+    m_activate = (ActivateFunc)GetProcAddress((HMODULE)m_handle, "activate");
+    if (m_activate) {
+        m_activate(m_plugin);
+    }
+
     // Get run function
-    using RunFunc = void (*)(void* instance, uint32_t sampleCount);
     m_run = (RunFunc)GetProcAddress((HMODULE)m_handle, "run");
     if (!m_run) {
         qWarning() << "Failed to get run function";
         unloadPlugin();
         return false;
     }
+
+    // Get deactivate function
+    m_deactivate = (DeactivateFunc)GetProcAddress((HMODULE)m_handle, "deactivate");
+
+    // Get cleanup function
+    m_cleanup = (CleanupFunc)GetProcAddress((HMODULE)m_handle, "cleanup");
 
     return true;
 
@@ -202,57 +212,6 @@ bool LV2Host::loadPlugin() {
     }
 
     // Get plugin descriptor (index 0)
-    void* pluginDescriptor = descriptor(0);
-    if (!pluginDescriptor) {
-        qWarning() << "Failed to get LV2 plugin descriptor";
-        unloadPlugin();
-        return false;
-    }
-
-    // Get instantiate function
-    using InstantiateFunc = void* (*)(void* descriptor, double sampleRate, const char* bundlePath, const void* features);
-    m_instantiate = (InstantiateFunc)dlsym(m_handle, "instantiate");
-    if (!m_instantiate) {
-        qWarning() << "Failed to get instantiate function:" << dlerror();
-        unloadPlugin();
-        return false;
-    }
-
-    // Create plugin instance
-    m_plugin = m_instantiate(pluginDescriptor, m_sampleRate, m_info.path.toUtf8().constData(), nullptr);
-    if (!m_plugin) {
-        qWarning() << "Failed to instantiate LV2 plugin";
-        unloadPlugin();
-        return false;
-    }
-
-    // Get run function
-    using RunFunc = void (*)(void* instance, uint32_t sampleCount);
-    m_run = (RunFunc)dlsym(m_handle, "run");
-    if (!m_run) {
-        qWarning() << "Failed to get run function:" << dlerror();
-        unloadPlugin();
-        return false;
-    }
-
-    return true;
-#endif
-}
-
-void LV2Host::unloadPlugin() {
-    if (m_plugin && m_cleanup) {
-        m_cleanup(m_plugin);
-        m_plugin = nullptr;
-    }
-    if (m_handle) {
-#ifdef _WIN32
-        FreeLibrary((HMODULE)m_handle);
-#else
-        dlclose(m_handle);
-#endif
-        m_handle = nullptr;
-    }
-    m_instantiate = nullptr;
-    m_run = nullptr;
-    m_cleanup = nullptr;
-}
+    m_descriptor = descriptor(0);
+    if (!m_descriptor) {
+        qWarning() << "Failed to
