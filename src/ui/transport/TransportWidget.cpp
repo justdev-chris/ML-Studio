@@ -1,8 +1,5 @@
 #include "TransportWidget.h"
-
-#include <QBoxLayout>
 #include <QStyle>
-#include <QIcon>
 #include <QFont>
 #include <QString>
 #include <QSizePolicy>
@@ -27,63 +24,55 @@ TransportWidget::TransportWidget(QWidget* parent)
 TransportWidget::~TransportWidget() {}
 
 void TransportWidget::setupUI() {
-    // Main layout
     QHBoxLayout* mainLayout = new QHBoxLayout(this);
     mainLayout->setContentsMargins(10, 5, 10, 5);
     mainLayout->setSpacing(8);
 
-    // --- Transport buttons ---
     // Rewind
-    rewindButton = new QPushButton(this);
-    rewindButton->setText("⏪");
+    rewindButton = new QPushButton("⏪", this);
     rewindButton->setFixedSize(40, 40);
     rewindButton->setToolTip("Rewind");
+    connect(rewindButton, &QPushButton::clicked, this, [this]() { emit positionChanged(0); });
     mainLayout->addWidget(rewindButton);
 
     // Play
-    playButton = new QPushButton(this);
-    playButton->setText("▶");
+    playButton = new QPushButton("▶", this);
     playButton->setFixedSize(50, 45);
     playButton->setToolTip("Play / Pause");
     connect(playButton, &QPushButton::clicked, this, &TransportWidget::onPlayClicked);
     mainLayout->addWidget(playButton);
 
     // Stop
-    stopButton = new QPushButton(this);
-    stopButton->setText("■");
+    stopButton = new QPushButton("■", this);
     stopButton->setFixedSize(40, 40);
     stopButton->setToolTip("Stop");
     connect(stopButton, &QPushButton::clicked, this, &TransportWidget::onStopClicked);
     mainLayout->addWidget(stopButton);
 
     // Record
-    recordButton = new QPushButton(this);
-    recordButton->setText("●");
+    recordButton = new QPushButton("●", this);
     recordButton->setFixedSize(40, 40);
     recordButton->setToolTip("Record");
     connect(recordButton, &QPushButton::clicked, this, &TransportWidget::onRecordClicked);
     mainLayout->addWidget(recordButton);
 
     // Forward
-    forwardButton = new QPushButton(this);
-    forwardButton->setText("⏩");
+    forwardButton = new QPushButton("⏩", this);
     forwardButton->setFixedSize(40, 40);
     forwardButton->setToolTip("Fast Forward");
     mainLayout->addWidget(forwardButton);
 
     // Loop
-    loopButton = new QPushButton(this);
-    loopButton->setText("🔁");
+    loopButton = new QPushButton("🔁", this);
     loopButton->setFixedSize(40, 40);
     loopButton->setToolTip("Loop");
     loopButton->setCheckable(true);
     connect(loopButton, &QPushButton::clicked, this, &TransportWidget::onLoopClicked);
     mainLayout->addWidget(loopButton);
 
-    // --- Spacer ---
     mainLayout->addSpacing(15);
 
-    // --- Position display ---
+    // Position display
     positionLabel = new QLabel("001.01.000", this);
     positionLabel->setFont(QFont("Segoe UI", 14, QFont::Bold));
     positionLabel->setFixedWidth(130);
@@ -92,15 +81,18 @@ void TransportWidget::setupUI() {
 
     mainLayout->addSpacing(10);
 
-    // --- Progress slider ---
+    // Progress slider
     progressSlider = new QSlider(Qt::Horizontal, this);
     progressSlider->setRange(0, 1000);
     progressSlider->setValue(0);
     progressSlider->setFixedWidth(180);
     progressSlider->setToolTip("Playhead position");
+    connect(progressSlider, &QSlider::sliderMoved, this, [this](int value) {
+        emit positionChanged(value);
+    });
     mainLayout->addWidget(progressSlider);
 
-    // --- Progress label ---
+    // Progress label
     progressLabel = new QLabel("0%", this);
     progressLabel->setFont(QFont("Segoe UI", 9));
     progressLabel->setFixedWidth(40);
@@ -109,7 +101,7 @@ void TransportWidget::setupUI() {
 
     mainLayout->addSpacing(15);
 
-    // --- Tempo ---
+    // Tempo
     QVBoxLayout* tempoLayout = new QVBoxLayout();
     tempoLayout->setSpacing(1);
 
@@ -130,7 +122,7 @@ void TransportWidget::setupUI() {
 
     mainLayout->addSpacing(10);
 
-    // --- Time signature ---
+    // Time signature
     QVBoxLayout* tsLayout = new QVBoxLayout();
     tsLayout->setSpacing(1);
 
@@ -148,10 +140,7 @@ void TransportWidget::setupUI() {
 
     mainLayout->addLayout(tsLayout);
 
-    // Update button states
-    updateButtonStates();
-
-    // Set overall style
+    // Apply styles
     setStyleSheet(R"(
         QPushButton {
             background-color: #2a2a30;
@@ -161,19 +150,10 @@ void TransportWidget::setupUI() {
             font-size: 16px;
             font-weight: bold;
         }
-        QPushButton:hover {
-            background-color: #3a3a45;
-        }
-        QPushButton:pressed {
-            background-color: #4a4a55;
-        }
-        QPushButton:checked {
-            background-color: #4a6a8a;
-            border-color: #6a8aaa;
-        }
-        QLabel {
-            color: #ccc;
-        }
+        QPushButton:hover { background-color: #3a3a45; }
+        QPushButton:pressed { background-color: #4a4a55; }
+        QPushButton:checked { background-color: #4a6a8a; border-color: #6a8aaa; }
+        QLabel { color: #ccc; }
         QSpinBox {
             background-color: #1a1a20;
             color: #ddd;
@@ -204,15 +184,14 @@ void TransportWidget::setupUI() {
             border-radius: 4px;
             padding: 2px;
         }
-        QComboBox::drop-down {
-            border: none;
-        }
         QComboBox QAbstractItemView {
             background-color: #1a1a20;
             color: #ddd;
             selection-background-color: #4a4a55;
         }
     )");
+
+    updateButtonStates();
 }
 
 void TransportWidget::onPlayClicked() {
@@ -230,9 +209,7 @@ void TransportWidget::onStopClicked() {
 
 void TransportWidget::onRecordClicked() {
     isRecording = !isRecording;
-    if (isRecording) {
-        isPlaying = true;
-    }
+    if (isRecording) isPlaying = true;
     updateButtonStates();
     emit recordPressed();
 }
@@ -284,20 +261,17 @@ void TransportWidget::setTimeSignature(int beats, int noteValue) {
     currentNoteValue = noteValue;
     QString text = QString("%1/%2").arg(beats).arg(noteValue);
     int index = timeSignatureCombo->findText(text);
-    if (index >= 0) {
-        timeSignatureCombo->setCurrentIndex(index);
-    }
+    if (index >= 0) timeSignatureCombo->setCurrentIndex(index);
 }
 
 void TransportWidget::updateTimeDisplay(int bars, int beats, int ticks) {
     currentBar = bars;
     currentBeat = beats;
     currentTick = ticks;
-    QString text = QString("%1.%2.%3")
-                       .arg(bars, 3, 10, QChar('0'))
-                       .arg(beats, 2, 10, QChar('0'))
-                       .arg(ticks, 3, 10, QChar('0'));
-    positionLabel->setText(text);
+    positionLabel->setText(QString("%1.%2.%3")
+        .arg(bars, 3, 10, QChar('0'))
+        .arg(beats, 2, 10, QChar('0'))
+        .arg(ticks, 3, 10, QChar('0')));
 }
 
 void TransportWidget::updateProgress(float percentage) {
