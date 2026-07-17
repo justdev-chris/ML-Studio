@@ -4,7 +4,6 @@
 
 namespace MathUtils {
 
-// Biquad coefficient calculation
 void Biquad::updateCoefficients() {
     if (m_sampleRate <= 0) return;
 
@@ -117,7 +116,6 @@ void Biquad::updateCoefficients() {
             break;
         }
         default: {
-            // Passthrough
             m_b0 = 1.0f;
             m_b1 = 0.0f;
             m_b2 = 0.0f;
