@@ -33,14 +33,12 @@ bool CLAPHost::initialize(double sampleRate, int blockSize) {
         qWarning() << "Failed to load CLAP plugin:" << m_info.path;
         return false;
     }
-    // Allocate buffers
     for (int i = 0; i < 2; i++) {
         m_inputBuffers[i] = new float[m_blockSize];
         m_outputBuffers[i] = new float[m_blockSize];
         memset(m_inputBuffers[i], 0, m_blockSize * sizeof(float));
         memset(m_outputBuffers[i], 0, m_blockSize * sizeof(float));
     }
-    // Activate the plugin
     if (m_plugin && m_plugin->activate) {
         m_plugin->activate(m_plugin, m_sampleRate, m_blockSize, m_blockSize);
     }
@@ -88,6 +86,8 @@ void CLAPHost::shutdown() {
     m_gui = nullptr;
     m_initialized = false;
     m_parameterCache.clear();
+    m_midiEvents.clear();
+    m_eventBuffer.clear();
 }
 
 void CLAPHost::process(float** inputs, float** outputs, int numChannels, int numFrames) {
@@ -99,7 +99,6 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
-    // Copy inputs to internal buffers
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (inputs[c]) {
             memcpy(m_inputBuffers[c], inputs[c], numFrames * sizeof(float));
@@ -108,14 +107,12 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
         }
     }
 
-    // Prepare CLAP process structure
     clap_process_t process;
     memset(&process, 0, sizeof(process));
     process.steady_time = 0;
     process.frames_count = numFrames;
     process.transport = nullptr;
 
-    // Audio buffers
     clap_audio_buffer_t inputBuffer, outputBuffer;
     inputBuffer.channel_count = numChannels;
     outputBuffer.channel_count = numChannels;
@@ -129,11 +126,39 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
     process.outputs = &outputBuffer;
     process.outputs_count = 1;
 
-    // Process
+    if (!m_midiEvents.isEmpty()) {
+        size_t eventSize = m_midiEvents.size() * sizeof(clap_event_note_t);
+        m_eventBuffer.resize(eventSize + sizeof(clap_event_header_t));
+        clap_event_header_t* header = (clap_event_header_t*)m_eventBuffer.data();
+        header->size = m_eventBuffer.size();
+        header->time = 0;
+        header->space_id = CLAP_CORE_EVENT_SPACE_ID;
+        header->type = CLAP_EVENT_NOTE;
+        header->flags = 0;
+
+        clap_event_note_t* noteEvents = (clap_event_note_t*)(header + 1);
+        for (int i = 0; i < m_midiEvents.size(); i++) {
+            const MIDIEvent& ev = m_midiEvents[i];
+            noteEvents[i].header.size = sizeof(clap_event_note_t);
+            noteEvents[i].header.time = ev.start;
+            noteEvents[i].header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            noteEvents[i].header.type = CLAP_EVENT_NOTE;
+            noteEvents[i].header.flags = 0;
+            noteEvents[i].port_index = 0;
+            noteEvents[i].channel = ev.channel;
+            noteEvents[i].key = ev.note;
+            noteEvents[i].velocity = ev.velocity / 127.0f;
+            noteEvents[i].duration = ev.length / 480.0f;
+        }
+
+        process.in_events = (const clap_event_header_t*)m_eventBuffer.data();
+        process.in_events_count = m_midiEvents.size();
+        m_midiEvents.clear();
+    }
+
     bool result = m_plugin->process(m_plugin, &process);
     if (!result) {
         qWarning() << "CLAP processing failed for:" << m_info.name;
-        // Passthrough on failure
         for (int c = 0; c < numChannels && c < 2; c++) {
             if (inputs[c] && outputs[c] && inputs[c] != outputs[c])
                 memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
@@ -141,7 +166,6 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
-    // Copy outputs back
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (outputs[c]) {
             memcpy(outputs[c], m_outputBuffers[c], numFrames * sizeof(float));
@@ -286,3 +310,48 @@ bool CLAPHost::loadPlugin() {
 
     return true;
 }
+
+void CLAPHost::unloadPlugin() {
+    if (m_plugin && m_destroy) m_destroy(m_plugin);
+#ifdef _WIN32
+    if (m_handle) FreeLibrary((HMODULE)m_handle);
+#else
+    if (m_handle) dlclose(m_handle);
+#endif
+    m_handle = nullptr;
+    m_plugin = nullptr;
+    m_entry = nullptr;
+    m_factory = nullptr;
+    m_gui = nullptr;
+    m_init = m_destroy = m_process = m_setParam = m_getParam = nullptr;
+    m_eventBuffer.clear();
+}
+
+// Platform-specific library loading
+#ifdef _WIN32
+CLAPHost::HMODULE CLAPHost::loadLibrary(const QString& path) {
+    return reinterpret_cast<HMODULE>(::LoadLibraryW(path.toStdWString().c_str()));
+}
+
+void CLAPHost::unloadLibrary(HMODULE handle) {
+    if (handle) ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
+}
+
+void* CLAPHost::getFunction(HMODULE handle, const char* name) {
+    if (!handle) return nullptr;
+    return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
+}
+#else
+CLAPHost::HMODULE CLAPHost::loadLibrary(const QString& path) {
+    return dlopen(path.toUtf8().constData(), RTLD_LAZY);
+}
+
+void CLAPHost::unloadLibrary(HMODULE handle) {
+    if (handle) dlclose(handle);
+}
+
+void* CLAPHost::getFunction(HMODULE handle, const char* name) {
+    if (!handle) return nullptr;
+    return dlsym(handle, name);
+}
+#endif
