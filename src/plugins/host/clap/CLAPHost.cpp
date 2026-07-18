@@ -81,18 +81,44 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
+    // Prepare CLAP process structure
     clap_process_t process;
     memset(&process, 0, sizeof(process));
-    process.steady_time = 0;
+    process.steady_time = 0; // not used
     process.frames_count = numFrames;
-    // In a real implementation, we would set up audio buffers here
-    // For now, we use a simpler approach
-    // Since CLAP requires a more complex buffer setup, we'll still do passthrough
-    // but the real processing would be enabled by connecting the buffers
-    // m_plugin->process(m_plugin, &process);
+    process.transport = nullptr; // not used
+
+    // Set up audio buffers
+    clap_audio_buffer_t inputBuffer;
+    clap_audio_buffer_t outputBuffer;
+
+    // Input buffer setup
+    inputBuffer.channel_count = numChannels;
+    // For simplicity, we'll allocate temporary buffers for CLAP
+    // In a real implementation, you'd use the plugin's port mapping
+    float* inputData[2] = {nullptr, nullptr};
+    float* outputData[2] = {nullptr, nullptr};
+
     for (int c = 0; c < numChannels && c < 2; c++) {
-        if (inputs[c] && outputs[c] && inputs[c] != outputs[c])
-            memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
+        inputData[c] = inputs[c];
+        outputData[c] = outputs[c];
+    }
+    inputBuffer.data32 = inputData;
+    inputBuffer.data64 = nullptr;
+    process.inputs = &inputBuffer;
+    process.inputs_count = 1;
+
+    // Output buffer setup
+    outputBuffer.channel_count = numChannels;
+    outputBuffer.data32 = outputData;
+    outputBuffer.data64 = nullptr;
+    process.outputs = &outputBuffer;
+    process.outputs_count = 1;
+
+    // Process the plugin
+    bool result = m_plugin->process(m_plugin, &process);
+    if (!result) {
+        qWarning() << "CLAP plugin processing failed for:" << m_info.name;
     }
 }
 
