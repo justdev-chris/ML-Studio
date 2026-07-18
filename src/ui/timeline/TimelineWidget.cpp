@@ -3,7 +3,6 @@
 #include <QPen>
 #include <QBrush>
 #include <QFont>
-#include <QFontMetrics>
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include <QDebug>
@@ -13,7 +12,6 @@ TimelineWidget::TimelineWidget(QWidget* parent)
     setMinimumHeight(200);
     setMouseTracking(true);
 
-    // Setup scrollbars
     hScrollBar = new QScrollBar(Qt::Horizontal, this);
     vScrollBar = new QScrollBar(Qt::Vertical, this);
 
@@ -32,12 +30,10 @@ TimelineWidget::TimelineWidget(QWidget* parent)
         viewOffsetX = value;
         update();
     });
-
     connect(vScrollBar, &QScrollBar::valueChanged, this, [this](int) {
         update();
     });
 
-    // Default tracks
     trackNames = {"Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6", "Track 7", "Track 8"};
 }
 
@@ -58,10 +54,30 @@ void TimelineWidget::setZoom(float factor) {
 
 void TimelineWidget::setTracks(int count) {
     trackCount = count;
-    while (trackNames.size() < trackCount) {
+    while (trackNames.size() < trackCount)
         trackNames.append(QString("Track %1").arg(trackNames.size() + 1));
-    }
     updateScrollArea();
+    update();
+}
+
+void TimelineWidget::loadClipsFromProject(Project* project) {
+    if (!project) return;
+    clips.clear();
+    for (int t = 0; t < project->getTrackCount(); t++) {
+        Track* track = project->getTrack(t);
+        if (!track) continue;
+        for (int c = 0; c < track->getClipCount(); c++) {
+            Clip* clip = track->getClip(c);
+            if (!clip) continue;
+            ClipDisplay display;
+            display.trackIndex = t;
+            display.startX = clip->getStart() / 100;
+            display.width = clip->getLength() / 100;
+            display.name = clip->getName();
+            display.color = clip->getColor();
+            clips.append(display);
+        }
+    }
     update();
 }
 
@@ -84,19 +100,16 @@ void TimelineWidget::clearClips() {
 void TimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, false);
-
     int width = this->width();
     int height = this->height();
 
     painter.fillRect(0, 0, width, height, QColor(30, 30, 35));
-
     drawTimeRuler(painter);
     drawTracks(painter);
     drawGrid(painter);
     drawClips(painter);
     drawTrackLabels(painter);
     drawPlayhead(painter);
-
     updateScrollArea();
 }
 
@@ -106,25 +119,21 @@ void TimelineWidget::drawGrid(QPainter& painter) {
     int startY = rulerHeight;
     int height = trackCount * trackHeight;
 
-    int beatWidth = static_cast<int>(100 * zoom);
+    int beatWidth = (int)(100 * zoom);
     int totalBeats = (width / beatWidth) + 4;
 
     painter.setPen(QPen(QColor(50, 50, 55), 1));
     for (int i = 0; i < totalBeats; i++) {
         int x = startX + i * beatWidth - viewOffsetX;
-        if (x > startX && x < startX + width) {
+        if (x > startX && x < startX + width)
             painter.drawLine(x, startY, x, startY + height);
-        }
     }
-
     painter.setPen(QPen(QColor(60, 60, 70), 2));
     for (int i = 0; i < totalBeats; i += 4) {
         int x = startX + i * beatWidth - viewOffsetX;
-        if (x > startX && x < startX + width) {
+        if (x > startX && x < startX + width)
             painter.drawLine(x, startY, x, startY + height);
-        }
     }
-
     painter.setPen(QPen(QColor(40, 40, 45), 1));
     for (int i = 0; i <= trackCount; i++) {
         int y = startY + i * trackHeight;
@@ -136,31 +145,25 @@ void TimelineWidget::drawTracks(QPainter& painter) {
     int startX = trackLabelWidth;
     int width = this->width() - trackLabelWidth;
     int startY = rulerHeight;
-
     for (int i = 0; i < trackCount; i++) {
         int y = startY + i * trackHeight;
-        QRect rect(startX, y, width, trackHeight);
         QColor trackColor = (i % 2 == 0) ? QColor(35, 35, 40) : QColor(40, 40, 45);
-        painter.fillRect(rect, trackColor);
+        painter.fillRect(startX, y, width, trackHeight, trackColor);
     }
 }
 
 void TimelineWidget::drawClips(QPainter& painter) {
     int startX = trackLabelWidth;
     int startY = rulerHeight;
-
-    for (int i = 0; i < clips.size(); i++) {
-        ClipDisplay& clip = clips[i];
+    for (const ClipDisplay& clip : clips) {
         int x = startX + clip.startX - viewOffsetX;
         int y = startY + clip.trackIndex * trackHeight + 2;
-        int width = clip.width;
-        int height = trackHeight - 4;
-
-        QRect rect(x, y, width, height);
+        int w = clip.width;
+        int h = trackHeight - 4;
+        QRect rect(x, y, w, h);
         painter.fillRect(rect, clip.color);
         painter.setPen(QPen(QColor(255, 255, 255, 80), 1));
         painter.drawRect(rect);
-
         painter.setPen(QPen(QColor(255, 255, 255, 200)));
         painter.setFont(QFont("Segoe UI", 9));
         painter.drawText(rect.adjusted(4, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, clip.name);
@@ -171,7 +174,6 @@ void TimelineWidget::drawPlayhead(QPainter& painter) {
     int x = trackLabelWidth + playheadX - viewOffsetX;
     int y = rulerHeight;
     int height = trackCount * trackHeight;
-
     painter.setPen(QPen(QColor(255, 50, 50, 200), 2));
     painter.drawLine(x, y, x, y + height);
 
@@ -185,7 +187,6 @@ void TimelineWidget::drawPlayhead(QPainter& painter) {
 void TimelineWidget::drawTrackLabels(QPainter& painter) {
     int startY = rulerHeight;
     painter.fillRect(0, startY, trackLabelWidth, trackCount * trackHeight, QColor(25, 25, 30));
-
     for (int i = 0; i < trackCount && i < trackNames.size(); i++) {
         int y = startY + i * trackHeight;
         QRect rect(4, y, trackLabelWidth - 8, trackHeight);
@@ -198,21 +199,18 @@ void TimelineWidget::drawTrackLabels(QPainter& painter) {
 void TimelineWidget::drawTimeRuler(QPainter& painter) {
     int startX = trackLabelWidth;
     int width = this->width() - trackLabelWidth;
-
     painter.fillRect(0, 0, this->width(), rulerHeight, QColor(20, 20, 25));
     painter.setPen(QPen(QColor(100, 100, 110)));
     painter.drawLine(0, rulerHeight, this->width(), rulerHeight);
 
-    int beatWidth = static_cast<int>(100 * zoom);
+    int beatWidth = (int)(100 * zoom);
     int totalBeats = (width / beatWidth) + 4;
-
     painter.setPen(QPen(QColor(150, 150, 160)));
     painter.setFont(QFont("Segoe UI", 8));
     for (int i = 0; i < totalBeats; i++) {
         int x = startX + i * beatWidth - viewOffsetX;
-        if (x > startX && x < startX + width) {
+        if (x > startX && x < startX + width)
             painter.drawText(x + 2, 0, 30, rulerHeight, Qt::AlignLeft | Qt::AlignVCenter, QString::number(i + 1));
-        }
     }
 }
 
@@ -220,7 +218,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event) {
     int startX = trackLabelWidth;
     int x = event->pos().x();
 
-    if (x >= startX + playheadX - viewOffsetX - 5 && x <= startX + playheadX - viewOffsetX + 5) {
+    if (x >= startX + playheadX - viewOffsetX - 5 &&
+        x <= startX + playheadX - viewOffsetX + 5) {
         isDraggingPlayhead = true;
         dragStartX = x;
         dragStartPlayheadX = playheadX;
@@ -231,11 +230,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event) {
         ClipDisplay& clip = clips[i];
         int clipX = startX + clip.startX - viewOffsetX;
         int clipY = rulerHeight + clip.trackIndex * trackHeight + 2;
-        int clipWidth = clip.width;
-        int clipHeight = trackHeight - 4;
-
-        if (x >= clipX && x <= clipX + clipWidth &&
-            event->pos().y() >= clipY && event->pos().y() <= clipY + clipHeight) {
+        int clipW = clip.width;
+        int clipH = trackHeight - 4;
+        if (x >= clipX && x <= clipX + clipW &&
+            event->pos().y() >= clipY && event->pos().y() <= clipY + clipH) {
             selectedClipIndex = i;
             selectedTrackIndex = clip.trackIndex;
             dragClipIndex = i;
@@ -256,8 +254,6 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event) {
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent* event) {
     int x = event->pos().x();
-    int startX = trackLabelWidth;
-
     if (isDraggingPlayhead) {
         int delta = x - dragStartX;
         playheadX = dragStartPlayheadX + delta;
@@ -266,10 +262,9 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
-
     if (isDragging && dragClipIndex >= 0) {
         int delta = x - dragStartX;
-        int snap = static_cast<int>(10 * zoom);
+        int snap = (int)(10 * zoom);
         int newStart = clips[dragClipIndex].startX + delta;
         newStart = (newStart / snap) * snap;
         clips[dragClipIndex].startX = newStart;
@@ -296,9 +291,8 @@ void TimelineWidget::wheelEvent(QWheelEvent* event) {
 }
 
 void TimelineWidget::updateScrollArea() {
-    int totalWidth = trackLabelWidth + static_cast<int>(100 * zoom * 16);
+    int totalWidth = trackLabelWidth + (int)(100 * zoom * 16);
     int totalHeight = rulerHeight + trackCount * trackHeight;
-
     int visibleWidth = this->width() - trackLabelWidth;
     int visibleHeight = this->height() - rulerHeight;
 
