@@ -4,6 +4,7 @@
 #include "plugins/host/PluginHost.h"
 #include <QString>
 #include <QMap>
+#include <QVector>
 
 class LV2Host : public PluginInstance {
 public:
@@ -27,6 +28,8 @@ public:
     PluginInfo getInfo() const override { return m_info; }
     void* getNativeHandle() const override { return m_handle; }
 
+    void sendMIDI(const QVector<MIDIEvent>& events) override { m_midiEvents.append(events); }
+
 private:
     bool loadPlugin();
     void unloadPlugin();
@@ -35,6 +38,13 @@ private:
     void* m_handle = nullptr;
     void* m_plugin = nullptr;
     void* m_descriptor = nullptr;
+    void* m_uiDescriptor = nullptr;
+    void* m_uiHandle = nullptr;
+    void* m_editorWidget = nullptr;
+
+    // MIDI port buffers (will be set during port connection)
+    void* m_midiInputPort = nullptr;
+    void* m_midiOutputPort = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
@@ -56,6 +66,7 @@ private:
     QMap<int, float> m_parameterCache;
     float* m_inputBuffers[2] = {nullptr, nullptr};
     float* m_outputBuffers[2] = {nullptr, nullptr};
+    QVector<MIDIEvent> m_midiEvents;
 
 #ifdef _WIN32
     using HMODULE = void*;
