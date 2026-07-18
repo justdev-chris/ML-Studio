@@ -44,15 +44,16 @@ jobs:
         shell: bash
 
       - name: Download CLAP SDK
+        shell: bash
         run: |
-          mkdir -p libs/clap || mkdir libs/clap
+          mkdir -p libs
+          mkdir -p libs/clap
           curl -L -o libs/clap/clap.zip "https://github.com/free-audio/clap/archive/refs/tags/1.1.9.zip"
+          cd libs/clap
           unzip -q clap.zip
           mv clap-*/* .
           rm -rf clap-*
           rm clap.zip
-        shell: bash
-
 
       - name: Configure CMake
         run: |
