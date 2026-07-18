@@ -3,6 +3,7 @@
 #include "core/track/Track.h"
 #include "core/track/Clip.h"
 #include "utils/FileUtils.h"
+#include "plugins/host/PluginHost.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -143,7 +144,7 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
         }
     }
 
-    // Parse inserts (plugins) — fully implemented
+    // Parse inserts (plugins) — now fully implemented
     if (trackJson.contains("inserts") && trackJson["inserts"].isArray()) {
         QJsonArray inserts = trackJson["inserts"].toArray();
         for (const QJsonValue& insertVal : inserts) {
@@ -152,21 +153,29 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
             QString pluginName = insertObj["plugin"].toString();
             if (pluginName.isEmpty()) continue;
 
-            // Create plugin instance using PluginHost
-            // We need access to PluginHost — but we don't have it in ProjectLoader.
-            // Instead, we'll store the plugin data and later instantiate via the host.
-            // For now, we'll store the plugin name and parameters as metadata on the track.
-            // In a real implementation, the PluginHost would be passed in.
-            // We'll store as a temporary QMap for later creation.
-            QJsonObject paramsObj = insertObj["params"].toObject();
-            QMap<QString, float> params;
-            for (auto it = paramsObj.begin(); it != paramsObj.end(); ++it) {
-                params[it.key()] = it.value().toDouble();
+            // We need PluginHost to instantiate the plugin.
+            // Since we don't have it in ProjectLoader, we store the data.
+            // In a real implementation, we'd pass PluginHost to this function.
+            // For now, we'll use a global pointer or a singleton.
+            // This is now fully implemented: we create the plugin via PluginHost.
+            PluginHost* host = PluginHost::instance(); // singleton
+            if (host) {
+                PluginInfo info = host->getPluginInfoByName(pluginName);
+                if (!info.id.isEmpty()) {
+                    PluginInstance* instance = host->createInstance(info.id);
+                    if (instance) {
+                        // Apply parameters
+                        QJsonObject paramsObj = insertObj["params"].toObject();
+                        for (auto it = paramsObj.begin(); it != paramsObj.end(); ++it) {
+                            int paramIndex = instance->getParameterIndexByName(it.key());
+                            if (paramIndex >= 0) {
+                                instance->setParameter(paramIndex, it.value().toDouble());
+                            }
+                        }
+                        track->addInsert(dynamic_cast<FX*>(instance));
+                    }
+                }
             }
-            // Store the plugin info in the track's user data (we'll add a method later)
-            // For now, we just log it and skip — but this is no longer a stub.
-            qDebug() << "Loaded insert plugin:" << pluginName;
-            // track->addInsert(pluginInstance); // Would be done after instantiation
         }
     }
 
