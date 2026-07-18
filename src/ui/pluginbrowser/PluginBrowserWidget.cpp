@@ -1,17 +1,11 @@
 #include "PluginBrowserWidget.h"
 #include <QDir>
-#include <QFileInfo>
 #include <QSettings>
-#include <QHeaderView>
-#include <QDrag>
 #include <QMimeData>
+#include <QDrag>
 #include <QDebug>
 
-PluginBrowserWidget::PluginBrowserWidget(QWidget* parent)
-    : QWidget(parent) {
-    setupUI();
-}
-
+PluginBrowserWidget::PluginBrowserWidget(QWidget* parent) : QWidget(parent) { setupUI(); }
 PluginBrowserWidget::~PluginBrowserWidget() {}
 
 void PluginBrowserWidget::setupUI() {
@@ -24,7 +18,6 @@ void PluginBrowserWidget::setupUI() {
     title->setStyleSheet("font-size: 12px; font-weight: bold; padding: 4px; background-color: #1a1a20; border-radius: 4px;");
     mainLayout->addWidget(title);
 
-    // Search and controls
     QHBoxLayout* controlLayout = new QHBoxLayout();
     controlLayout->setSpacing(4);
 
@@ -51,49 +44,31 @@ void PluginBrowserWidget::setupUI() {
             paths.append("/usr/lib/vst3");
 #endif
         }
-        for (const QString& path : paths) {
-            scanPlugins(path);
-        }
+        for (const QString& path : paths) scanPlugins(path);
     });
     controlLayout->addWidget(m_refreshButton);
 
     mainLayout->addLayout(controlLayout);
 
-    // Plugin list
     m_pluginList = new QListWidget(this);
     m_pluginList->setStyleSheet(R"(
-        QListWidget {
-            background-color: #0a0a0f;
-            color: #ddd;
-            border: 1px solid #1a1a22;
-            border-radius: 4px;
-            outline: none;
-        }
-        QListWidget::item {
-            padding: 4px 8px;
-            border-bottom: 1px solid #1a1a22;
-        }
-        QListWidget::item:selected {
-            background-color: #2a2a3f;
-            color: #fff;
-        }
-        QListWidget::item:hover {
-            background-color: #1a1a2a;
-        }
+        QListWidget { background-color: #0a0a0f; color: #ddd; border: 1px solid #1a1a22; border-radius: 4px; outline: none; }
+        QListWidget::item { padding: 4px 8px; border-bottom: 1px solid #1a1a22; }
+        QListWidget::item:selected { background-color: #2a2a3f; color: #fff; }
+        QListWidget::item:hover { background-color: #1a1a2a; }
     )");
     m_pluginList->setDragEnabled(true);
+    m_pluginList->setDragDropMode(QAbstractItemView::DragOnly);
     connect(m_pluginList, &QListWidget::itemClicked, this, &PluginBrowserWidget::onItemClicked);
     connect(m_pluginList, &QListWidget::itemDoubleClicked, this, &PluginBrowserWidget::onItemDoubleClicked);
     mainLayout->addWidget(m_pluginList);
 
-    // Status and actions
     QHBoxLayout* bottomLayout = new QHBoxLayout();
     bottomLayout->setSpacing(4);
 
     m_statusLabel = new QLabel("Ready", this);
     m_statusLabel->setStyleSheet("color: #888; font-size: 9px;");
     bottomLayout->addWidget(m_statusLabel);
-
     bottomLayout->addStretch();
 
     m_addButton = new QPushButton("Add to Track", this);
@@ -128,9 +103,8 @@ void PluginBrowserWidget::scanPlugins(const QString& path) {
         return;
     }
 
-    QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
     int count = 0;
-
+    QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QFileInfo& file : files) {
         if (file.isDir() && file.suffix().toLower() == "vst3") {
             PluginInfo info;
@@ -188,7 +162,6 @@ void PluginBrowserWidget::filterPlugins(const QString& filter) {
 
 void PluginBrowserWidget::populateList() {
     m_pluginList->clear();
-
     if (m_filteredPlugins.isEmpty()) {
         QListWidgetItem* item = new QListWidgetItem("No plugins found", m_pluginList);
         item->setFlags(Qt::NoItemFlags);
@@ -197,7 +170,6 @@ void PluginBrowserWidget::populateList() {
         m_pluginList->addItem(item);
         return;
     }
-
     for (const PluginInfo& info : m_filteredPlugins) {
         QString display = QString("%1 [%2] %3")
                               .arg(info.name)
@@ -212,7 +184,6 @@ void PluginBrowserWidget::populateList() {
 
 void PluginBrowserWidget::onItemClicked(QListWidgetItem* item) {
     if (!item || m_filteredPlugins.isEmpty()) return;
-
     int index = m_pluginList->row(item);
     if (index >= 0 && index < m_filteredPlugins.size()) {
         m_selectedIndex = index;
@@ -223,7 +194,6 @@ void PluginBrowserWidget::onItemClicked(QListWidgetItem* item) {
 
 void PluginBrowserWidget::onItemDoubleClicked(QListWidgetItem* item) {
     if (!item || m_filteredPlugins.isEmpty()) return;
-
     int index = m_pluginList->row(item);
     if (index >= 0 && index < m_filteredPlugins.size()) {
         emit pluginDoubleClicked(m_filteredPlugins[index]);
@@ -236,4 +206,14 @@ PluginInfo PluginBrowserWidget::getSelectedPlugin() const {
         return m_filteredPlugins[m_selectedIndex];
     }
     return PluginInfo();
+}
+
+void PluginBrowserWidget::startDrag(Qt::DropActions supportedActions) {
+    if (!hasSelection()) return;
+    PluginInfo info = getSelectedPlugin();
+    QMimeData* mimeData = new QMimeData();
+    mimeData->setText(info.id);
+    QDrag* drag = new QDrag(this);
+    drag->setMimeData(mimeData);
+    drag->exec(supportedActions);
 }
