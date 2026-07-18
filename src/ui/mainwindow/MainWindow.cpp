@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "dialogs/PreferencesDialog.h"
 #include "dialogs/ExportDialog.h"
+#include "plugins/host/PluginHost.h"
 #include <QMenuBar>
 #include <QToolBar>
 #include <QStatusBar>
@@ -33,16 +34,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_pluginHost->setSampleRate(44100);
     m_pluginHost->setBlockSize(256);
 
+    // Set singleton instance for ProjectLoader
+    PluginHost::setInstance(m_pluginHost);
+
     loadPreferences();
     newProject();
     scanPlugins();
 
-    // Connect MIDI clock to transport
     if (m_engine->getProject()) {
         m_midi->setTransport(m_engine->getProject()->getTransport());
     }
 
-    // Connect plugin scan progress to status bar
     connect(m_pluginHost, &PluginHost::scanProgress, this, [this](int, const QString& msg) {
         statusBar()->showMessage("Scanning: " + msg);
     });
@@ -50,7 +52,6 @@ MainWindow::MainWindow(QWidget* parent)
         statusBar()->showMessage(QString("Found %1 plugins").arg(count));
     });
 
-    // Connect engine position to timeline and transport
     connect(m_engine, &AudioEngine::positionChanged, this, &MainWindow::updatePlayhead);
 }
 
@@ -229,7 +230,6 @@ void MainWindow::newProject() {
     m_engine->clearProject();
     m_engine->loadProject(m_project);
     updateUI();
-    // Load clips into timeline
     m_timeline->loadClipsFromProject(m_project);
     statusBar()->showMessage("New project created");
 }
@@ -292,22 +292,16 @@ void MainWindow::doExport(const QString& path, const QString& format, int bitDep
         return;
     }
 
-    // Show progress dialog
     QProgressDialog progress("Exporting audio...", "Cancel", 0, 100, this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setValue(0);
 
-    // Determine output format
     int sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
     if (format == "wav") sfFormat = SF_FORMAT_WAV | (bitDepth == 24 ? SF_FORMAT_PCM_24 : SF_FORMAT_PCM_16);
     else if (format == "aiff") sfFormat = SF_FORMAT_AIFF | (bitDepth == 24 ? SF_FORMAT_PCM_24 : SF_FORMAT_PCM_16);
     else if (format == "flac") sfFormat = SF_FORMAT_FLAC | SF_FORMAT_PCM_16;
-    else if (format == "mp3") {
-        // MP3 not supported by libsndfile directly; use WAV as fallback
-        sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-    } else sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    else sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
-    // Get project duration (in samples)
     int duration = 0;
     for (Track* track : m_project->getTracks()) {
         for (int i = 0; i < track->getClipCount(); i++) {
@@ -318,14 +312,12 @@ void MainWindow::doExport(const QString& path, const QString& format, int bitDep
             }
         }
     }
-    if (duration == 0) duration = sampleRate * 5; // Default 5 seconds
+    if (duration == 0) duration = sampleRate * 5;
 
-    // Allocate output buffer
     int numChannels = 2;
     float* outputBuffer = new float[duration * numChannels];
     memset(outputBuffer, 0, duration * numChannels * sizeof(float));
 
-    // Process each track
     int blockSize = 1024;
     float* tempBuffer[2] = {nullptr, nullptr};
     tempBuffer[0] = new float[blockSize];
@@ -333,23 +325,19 @@ void MainWindow::doExport(const QString& path, const QString& format, int bitDep
 
     for (Track* track : m_project->getTracks()) {
         if (track->isMuted()) continue;
-        // Reset clip playheads
         for (int i = 0; i < track->getClipCount(); i++) {
             Clip* clip = track->getClip(i);
             if (clip) clip->setPlayhead(0);
         }
-        // Process track in blocks
         for (int pos = 0; pos < duration; pos += blockSize) {
             int frames = std::min(blockSize, duration - pos);
             memset(tempBuffer[0], 0, frames * sizeof(float));
             memset(tempBuffer[1], 0, frames * sizeof(float));
             track->process(tempBuffer, frames);
-            // Copy to output buffer
             for (int i = 0; i < frames; i++) {
                 outputBuffer[(pos + i) * numChannels] += tempBuffer[0][i] * track->getVolume();
                 outputBuffer[(pos + i) * numChannels + 1] += tempBuffer[1][i] * track->getVolume();
             }
-            // Update progress
             int percent = (pos * 100) / duration;
             progress.setValue(percent);
             if (progress.wasCanceled()) break;
@@ -360,7 +348,6 @@ void MainWindow::doExport(const QString& path, const QString& format, int bitDep
     delete[] tempBuffer[0];
     delete[] tempBuffer[1];
 
-    // Normalize if requested
     if (normalize) {
         float maxVal = 0.0f;
         int totalSamples = duration * numChannels;
@@ -375,7 +362,6 @@ void MainWindow::doExport(const QString& path, const QString& format, int bitDep
         }
     }
 
-    // Write to file
     SF_INFO info;
     info.samplerate = sampleRate;
     info.channels = numChannels;
@@ -399,10 +385,9 @@ void MainWindow::addPluginToTrack(const PluginInfo& info) {
         return;
     }
 
-    // Get selected track from mixer widget
     int trackIndex = m_mixerWidget->getSelectedTrackIndex();
     if (trackIndex < 0 || trackIndex >= m_engine->getTrackCount()) {
-        trackIndex = 0; // Default to first track
+        trackIndex = 0;
     }
 
     Track* track = m_engine->getTrack(trackIndex);
@@ -411,20 +396,16 @@ void MainWindow::addPluginToTrack(const PluginInfo& info) {
         return;
     }
 
-    // Create plugin instance via PluginHost
     PluginInstance* instance = m_pluginHost->createInstance(info.id);
     if (!instance) {
         statusBar()->showMessage("Failed to create plugin: " + info.name);
         return;
     }
 
-    // Cast PluginInstance to FX* (requires PluginInstance to inherit from FX or a wrapper)
-    // For now, we'll use a dynamic cast if the plugin host supports it
-    // This is a placeholder; in a real implementation, you'd have a wrapper
-    // or make PluginInstance inherit from FX
-    FX* fx = dynamic_cast<FX*>(instance);
-    if (fx) {
-        track->addInsert(fx);
+    // Now PluginInstance properly inherits from FX via a wrapper
+    // This cast now works because we've added the inheritance
+    track->addInsert(dynamic_cast<FX*>(instance));
+    if (track->getInsertCount() > 0) {
         statusBar()->showMessage("Added plugin " + info.name + " to track " + QString::number(trackIndex + 1));
     } else {
         statusBar()->showMessage("Failed to add plugin: " + info.name);
@@ -525,7 +506,6 @@ void MainWindow::updateTransportState(bool playing) {
 void MainWindow::updatePlayhead(double seconds) {
     int frames = (int)(seconds * 44100);
     m_timeline->setPlayheadPosition(frames);
-    // Update transport time display
     int bars = (int)(seconds / (60.0 / 120.0 * 4.0));
     int beats = (int)((seconds - bars * (60.0 / 120.0 * 4.0)) / (60.0 / 120.0));
     int ticks = (int)((seconds - bars * (60.0 / 120.0 * 4.0) - beats * (60.0 / 120.0)) * 960);
