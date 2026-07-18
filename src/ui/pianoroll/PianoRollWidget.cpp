@@ -1,9 +1,5 @@
 #include "PianoRollWidget.h"
 #include <QPainter>
-#include <QPen>
-#include <QBrush>
-#include <QFont>
-#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QDebug>
 
@@ -13,7 +9,6 @@ PianoRollWidget::PianoRollWidget(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
-    // Default notes for demo
     QVector<MIDINote> demoNotes;
     for (int i = 0; i < 8; i++) {
         MIDINote note;
@@ -69,18 +64,39 @@ void PianoRollWidget::clearNotes() {
 QVector<MIDINote> PianoRollWidget::getSelectedNotes() const {
     QVector<MIDINote> selected;
     for (int idx : m_selectedIndices) {
-        if (idx >= 0 && idx < m_notes.size()) {
-            selected.append(m_notes[idx]);
-        }
+        if (idx >= 0 && idx < m_notes.size()) selected.append(m_notes[idx]);
     }
     return selected;
 }
 
 void PianoRollWidget::setZoom(float zoom) {
-    if (zoom < 0.1f) zoom = 0.1f;
-    if (zoom > 5.0f) zoom = 5.0f;
-    m_zoom = zoom;
+    m_zoom = qBound(0.1f, zoom, 5.0f);
     update();
+}
+
+void PianoRollWidget::setGridSnap(int ticks) {
+    m_gridSnap = qMax(1, ticks);
+}
+
+void PianoRollWidget::setKey(int rootNote, const QString& scale) {
+    m_rootNote = rootNote;
+    m_scale = scale;
+    update();
+}
+
+void PianoRollWidget::setShowVelocity(bool show) {
+    m_showVelocity = show;
+    update();
+}
+
+void PianoRollWidget::setQuantize(bool quantize) {
+    m_quantize = quantize;
+}
+
+void PianoRollWidget::setCurrentTrack(int trackIndex, int clipIndex) {
+    m_currentTrack = trackIndex;
+    m_currentClip = clipIndex;
+    emit contextChanged(trackIndex, clipIndex);
 }
 
 void PianoRollWidget::setPlayhead(int position) {
@@ -89,7 +105,6 @@ void PianoRollWidget::setPlayhead(int position) {
 }
 
 void PianoRollWidget::midiNoteOn(int note, int velocity) {
-    // Add a note from MIDI input
     MIDINote newNote;
     newNote.note = note;
     newNote.velocity = velocity;
@@ -99,7 +114,6 @@ void PianoRollWidget::midiNoteOn(int note, int velocity) {
 }
 
 void PianoRollWidget::midiNoteOff(int note) {
-    // Find the note and adjust length
     for (int i = m_notes.size() - 1; i >= 0; i--) {
         if (m_notes[i].note == note && m_notes[i].start <= m_playhead) {
             int length = m_playhead - m_notes[i].start;
@@ -116,43 +130,32 @@ void PianoRollWidget::midiNoteOff(int note) {
 void PianoRollWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, false);
-
     painter.fillRect(rect(), QColor(20, 20, 25));
     drawKeyboard(painter);
     drawGrid(painter);
     drawNotes(painter);
     drawPlayhead(painter);
     drawSelection(painter);
-
     painter.setPen(QPen(QColor(40, 40, 45), 1));
     painter.drawRect(rect());
 }
 
 void PianoRollWidget::drawKeyboard(QPainter& painter) {
-    int startX = 0;
-    int startY = 0;
-
     painter.fillRect(0, 0, m_keyWidth, height(), QColor(30, 30, 35));
-
     for (int note = m_highestNote; note >= m_lowestNote; note--) {
         int y = (m_highestNote - note) * m_keyHeight + m_offsetY;
         if (y < -m_keyHeight || y > height()) continue;
-
         bool isBlack = (note % 12 == 1 || note % 12 == 3 || note % 12 == 6 || note % 12 == 8 || note % 12 == 10);
         QColor color = isBlack ? QColor(40, 40, 45) : QColor(55, 55, 60);
         if (note == m_hoverNote) color = color.lighter(130);
-
-        painter.fillRect(startX, y, m_keyWidth, m_keyHeight, color);
+        painter.fillRect(0, y, m_keyWidth, m_keyHeight, color);
         painter.setPen(QPen(QColor(60, 60, 65), 1));
-        painter.drawRect(startX, y, m_keyWidth, m_keyHeight);
-
+        painter.drawRect(0, y, m_keyWidth, m_keyHeight);
         if (!isBlack) {
-            QString noteName = QString("%1%2")
-                                   .arg(QChar('C' + (note % 12)))
-                                   .arg((note / 12) - 1);
+            QString noteName = QString("%1%2").arg(QChar('C' + (note % 12))).arg((note / 12) - 1);
             painter.setPen(QPen(QColor(100, 100, 110)));
             painter.setFont(QFont("Segoe UI", 7));
-            painter.drawText(startX + 2, y + m_keyHeight - 4, noteName);
+            painter.drawText(2, y + m_keyHeight - 4, noteName);
         }
     }
 }
@@ -160,63 +163,51 @@ void PianoRollWidget::drawKeyboard(QPainter& painter) {
 void PianoRollWidget::drawGrid(QPainter& painter) {
     int startX = m_keyWidth;
     int width = this->width() - m_keyWidth;
-    int startY = 0;
-
     painter.fillRect(startX, 0, width, height(), QColor(25, 25, 30));
 
-    int beatWidth = static_cast<int>(m_gridSnap * m_zoom);
+    int beatWidth = (int)(m_gridSnap * m_zoom);
     int totalBeats = (width / beatWidth) + 4;
 
     painter.setPen(QPen(QColor(45, 45, 50), 1));
     for (int i = 0; i < totalBeats; i++) {
         int x = startX + i * beatWidth - m_offsetX;
-        if (x > startX && x < startX + width) {
-            painter.drawLine(x, 0, x, height());
-        }
+        if (x > startX && x < startX + width) painter.drawLine(x, 0, x, height());
     }
-
     painter.setPen(QPen(QColor(55, 55, 60), 1));
     for (int i = 0; i < totalBeats; i += 4) {
         int x = startX + i * beatWidth - m_offsetX;
-        if (x > startX && x < startX + width) {
-            painter.drawLine(x, 0, x, height());
-        }
+        if (x > startX && x < startX + width) painter.drawLine(x, 0, x, height());
     }
-
     painter.setPen(QPen(QColor(40, 40, 45), 1));
     for (int note = m_highestNote; note >= m_lowestNote; note--) {
         int y = (m_highestNote - note) * m_keyHeight + m_offsetY;
         if (y < 0 || y > height()) continue;
         painter.drawLine(startX, y, startX + width, y);
     }
-
     painter.setPen(QPen(QColor(80, 80, 90)));
     painter.setFont(QFont("Segoe UI", 7));
     for (int i = 0; i < totalBeats; i += 4) {
         int x = startX + i * beatWidth - m_offsetX + 2;
-        if (x > startX && x < startX + width) {
+        if (x > startX && x < startX + width)
             painter.drawText(x, 12, QString::number(i / 4 + 1));
-        }
     }
 }
 
 void PianoRollWidget::drawNotes(QPainter& painter) {
     int startX = m_keyWidth;
-
     for (int i = 0; i < m_notes.size(); i++) {
         const MIDINote& note = m_notes[i];
         int y = (m_highestNote - note.note) * m_keyHeight + m_offsetY;
         int x = startX + note.start * m_zoom - m_offsetX;
-        int width = note.length * m_zoom;
-
-        if (x + width < startX || x > this->width()) continue;
+        int w = note.length * m_zoom;
+        if (x + w < startX || x > this->width()) continue;
         if (y < -m_keyHeight || y > height()) continue;
 
-        int velocity = note.velocity;
+        int vel = note.velocity;
         QColor color;
-        if (velocity > 100) color = QColor(100, 200, 255);
-        else if (velocity > 70) color = QColor(70, 150, 220);
-        else if (velocity > 40) color = QColor(50, 100, 180);
+        if (vel > 100) color = QColor(100, 200, 255);
+        else if (vel > 70) color = QColor(70, 150, 220);
+        else if (vel > 40) color = QColor(50, 100, 180);
         else color = QColor(30, 60, 120);
 
         if (note.selected) {
@@ -225,10 +216,8 @@ void PianoRollWidget::drawNotes(QPainter& painter) {
         } else {
             painter.setPen(QPen(QColor(255, 255, 255, 50), 1));
         }
-
-        painter.fillRect(x, y, width, m_keyHeight - 1, color);
-        painter.drawRect(x, y, width, m_keyHeight - 1);
-
+        painter.fillRect(x, y, w, m_keyHeight - 1, color);
+        painter.drawRect(x, y, w, m_keyHeight - 1);
         painter.setPen(QPen(QColor(255, 255, 255, 150)));
         painter.setFont(QFont("Segoe UI", 6));
         painter.drawText(x + 2, y + m_keyHeight - 4, QString::number(note.note));
@@ -237,7 +226,6 @@ void PianoRollWidget::drawNotes(QPainter& painter) {
 
 void PianoRollWidget::drawPlayhead(QPainter& painter) {
     int x = m_keyWidth + m_playhead * m_zoom - m_offsetX;
-
     painter.setPen(QPen(QColor(255, 50, 50, 200), 2));
     painter.drawLine(x, 0, x, height());
 
@@ -262,9 +250,7 @@ void PianoRollWidget::mousePressEvent(QMouseEvent* event) {
     int note = getNoteAtY(y);
 
     if (x < startX) {
-        if (note >= 0 && note < 128) {
-            midiNoteOn(note, 100);
-        }
+        if (note >= 0 && note < 128) midiNoteOn(note, 100);
         return;
     }
 
@@ -273,9 +259,9 @@ void PianoRollWidget::mousePressEvent(QMouseEvent* event) {
         const MIDINote& noteData = m_notes[i];
         int noteY = (m_highestNote - noteData.note) * m_keyHeight + m_offsetY;
         int noteX = startX + noteData.start * m_zoom - m_offsetX;
-        int noteWidth = noteData.length * m_zoom;
+        int noteW = noteData.length * m_zoom;
 
-        if (x >= noteX && x <= noteX + noteWidth &&
+        if (x >= noteX && x <= noteX + noteW &&
             y >= noteY && y <= noteY + m_keyHeight) {
             m_editingIndex = i;
             m_editStartPos = noteData.start;
@@ -288,11 +274,8 @@ void PianoRollWidget::mousePressEvent(QMouseEvent* event) {
                 m_notes[i].selected = true;
             }
 
-            if (x >= noteX + noteWidth - 8) {
-                m_mode = ModeResize;
-            } else {
-                m_mode = ModeMove;
-            }
+            if (x >= noteX + noteW - 8) m_mode = ModeResize;
+            else m_mode = ModeMove;
 
             m_dragStart = event->pos();
             m_dragStartPosition = noteData.start;
@@ -318,14 +301,12 @@ void PianoRollWidget::mousePressEvent(QMouseEvent* event) {
         addNote(newNote);
         m_mode = ModeDraw;
     }
-
     update();
 }
 
 void PianoRollWidget::mouseMoveEvent(QMouseEvent* event) {
     int x = event->pos().x();
     int y = event->pos().y();
-
     m_hoverNote = getNoteAtY(y);
     setCursor(Qt::ArrowCursor);
 
@@ -348,11 +329,11 @@ void PianoRollWidget::mouseMoveEvent(QMouseEvent* event) {
 
     if (m_mode == ModeResize && m_editingIndex >= 0 && m_editingIndex < m_notes.size()) {
         int newPos = xToPosition(x);
-        int newLength = newPos - m_notes[m_editingIndex].start;
-        if (newLength < m_gridSnap / 2) newLength = m_gridSnap / 2;
-        if (m_quantize) newLength = ((newLength + m_gridSnap / 2) / m_gridSnap) * m_gridSnap;
-        if (newLength < 1) newLength = m_gridSnap;
-        m_notes[m_editingIndex].length = newLength;
+        int newLen = newPos - m_notes[m_editingIndex].start;
+        if (newLen < m_gridSnap / 2) newLen = m_gridSnap / 2;
+        if (m_quantize) newLen = ((newLen + m_gridSnap / 2) / m_gridSnap) * m_gridSnap;
+        if (newLen < 1) newLen = m_gridSnap;
+        m_notes[m_editingIndex].length = newLen;
         update();
         emit notesChanged(m_notes);
     }
@@ -366,26 +347,23 @@ void PianoRollWidget::mouseMoveEvent(QMouseEvent* event) {
         const MIDINote& noteData = m_notes[m_editingIndex];
         int startX = m_keyWidth;
         int noteX = startX + noteData.start * m_zoom - m_offsetX;
-        int noteWidth = noteData.length * m_zoom;
-        if (x >= noteX + noteWidth - 8 && x <= noteX + noteWidth + 4) {
+        int noteW = noteData.length * m_zoom;
+        if (x >= noteX + noteW - 8 && x <= noteX + noteW + 4)
             setCursor(Qt::SizeHorCursor);
-        }
     }
 }
 
 void PianoRollWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (m_mode == ModeSelect && !m_selectionRect.isNull()) {
-        int startX = m_keyWidth;
         QRect rect = m_selectionRect.normalized();
+        int startX = m_keyWidth;
         for (int i = 0; i < m_notes.size(); i++) {
             const MIDINote& noteData = m_notes[i];
             int noteX = startX + noteData.start * m_zoom - m_offsetX;
             int noteY = (m_highestNote - noteData.note) * m_keyHeight + m_offsetY;
-            int noteWidth = noteData.length * m_zoom;
-            QRect noteRect(noteX, noteY, noteWidth, m_keyHeight);
-            if (rect.intersects(noteRect)) {
-                m_notes[i].selected = true;
-            }
+            int noteW = noteData.length * m_zoom;
+            QRect noteRect(noteX, noteY, noteW, m_keyHeight);
+            if (rect.intersects(noteRect)) m_notes[i].selected = true;
         }
         emit notesChanged(m_notes);
         m_selectionRect = QRect();
@@ -413,9 +391,7 @@ void PianoRollWidget::wheelEvent(QWheelEvent* event) {
 void PianoRollWidget::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
         for (int i = m_notes.size() - 1; i >= 0; i--) {
-            if (m_notes[i].selected) {
-                removeNote(i);
-            }
+            if (m_notes[i].selected) removeNote(i);
         }
     }
     if (event->key() == Qt::Key_A && event->modifiers() & Qt::ControlModifier) {
@@ -427,11 +403,9 @@ void PianoRollWidget::keyPressEvent(QKeyEvent* event) {
 
 int PianoRollWidget::getNoteAtY(int y) const {
     int note = m_highestNote - (y - m_offsetY) / m_keyHeight;
-    if (note < 0) note = 0;
-    if (note > 127) note = 127;
-    return note;
+    return qBound(0, note, 127);
 }
 
 int PianoRollWidget::xToPosition(int x) const {
-    return static_cast<int>((x - m_keyWidth + m_offsetX) / m_zoom);
+    return (int)((x - m_keyWidth + m_offsetX) / m_zoom);
 }
