@@ -22,11 +22,8 @@ void Biquad::updateCoefficients() {
             float a0 = 1.0f + alpha;
             float a1 = -2.0f * cos_w0;
             float a2 = 1.0f - alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case HighPass: {
@@ -36,11 +33,8 @@ void Biquad::updateCoefficients() {
             float a0 = 1.0f + alpha;
             float a1 = -2.0f * cos_w0;
             float a2 = 1.0f - alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case BandPass: {
@@ -50,11 +44,8 @@ void Biquad::updateCoefficients() {
             float a0 = 1.0f + alpha;
             float a1 = -2.0f * cos_w0;
             float a2 = 1.0f - alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case Notch: {
@@ -64,11 +55,8 @@ void Biquad::updateCoefficients() {
             float a0 = 1.0f + alpha;
             float a1 = -2.0f * cos_w0;
             float a2 = 1.0f - alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case LowShelf: {
@@ -79,11 +67,8 @@ void Biquad::updateCoefficients() {
             float a0 = (A + 1.0f) - (A - 1.0f) * cos_w0 + 2.0f * std::sqrt(A) * alpha;
             float a1 = 2.0f * ((A - 1.0f) - (A + 1.0f) * cos_w0);
             float a2 = (A + 1.0f) - (A - 1.0f) * cos_w0 - 2.0f * std::sqrt(A) * alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case HighShelf: {
@@ -94,11 +79,8 @@ void Biquad::updateCoefficients() {
             float a0 = (A + 1.0f) + (A - 1.0f) * cos_w0 + 2.0f * std::sqrt(A) * alpha;
             float a1 = -2.0f * ((A - 1.0f) + (A + 1.0f) * cos_w0);
             float a2 = (A + 1.0f) + (A - 1.0f) * cos_w0 - 2.0f * std::sqrt(A) * alpha;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         case Peaking: {
@@ -108,19 +90,13 @@ void Biquad::updateCoefficients() {
             float a0 = 1.0f + alpha / A;
             float a1 = -2.0f * cos_w0;
             float a2 = 1.0f - alpha / A;
-            m_b0 = b0 / a0;
-            m_b1 = b1 / a0;
-            m_b2 = b2 / a0;
-            m_a1 = a1 / a0;
-            m_a2 = a2 / a0;
+            m_b0 = b0 / a0; m_b1 = b1 / a0; m_b2 = b2 / a0;
+            m_a1 = a1 / a0; m_a2 = a2 / a0;
             break;
         }
         default: {
-            m_b0 = 1.0f;
-            m_b1 = 0.0f;
-            m_b2 = 0.0f;
-            m_a1 = 0.0f;
-            m_a2 = 0.0f;
+            m_b0 = 1.0f; m_b1 = 0.0f; m_b2 = 0.0f;
+            m_a1 = 0.0f; m_a2 = 0.0f;
             break;
         }
     }
@@ -154,6 +130,31 @@ void Biquad::setCoefficients(float b0, float b1, float b2, float a1, float a2) {
     m_b2 = b2;
     m_a1 = a1;
     m_a2 = a2;
+}
+
+void Biquad::setFrequency(float frequency) {
+    m_frequency = frequency;
+    updateCoefficients();
+}
+
+void Biquad::setQ(float q) {
+    m_q = q;
+    updateCoefficients();
+}
+
+void Biquad::setGain(float gain) {
+    m_gain = gain;
+    updateCoefficients();
+}
+
+void Biquad::setType(Type type) {
+    m_type = type;
+    updateCoefficients();
+}
+
+void Biquad::setSampleRate(float sampleRate) {
+    m_sampleRate = sampleRate;
+    updateCoefficients();
 }
 
 } // namespace MathUtils
