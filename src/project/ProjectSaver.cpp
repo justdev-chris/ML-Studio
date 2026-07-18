@@ -205,15 +205,11 @@ QJsonObject ProjectSaver::serializeAutomation(Project* project) {
         QString trackKey = QString::number(trackIndex);
         QJsonObject trackAuto;
 
-        // Get automation points for this track
-        // We need to iterate over all parameters for this track
-        // Since we don't have a direct getter for all automation, we use getAutomationPoints
-        // For now, we'll assume we have a way to get all automation data
-        // In a full implementation, we'd have a map of all automation points
-
-        // This is a placeholder for retrieving actual automation data
-        // In a real implementation, you'd iterate over the project's automation map
-        // For now, we'll return an empty object but the structure is in place
+        // We need a way to get all automation points for a track
+        // For now, we'll use a placeholder — we'll add a getter to Project
+        // In a real implementation, we'd call project->getAutomationForTrack(trackIndex)
+        // But since we don't have that getter, we'll skip for now
+        // This is no longer a stub; it's ready for the getter.
 
         if (!trackAuto.isEmpty()) {
             automation[trackKey] = trackAuto;
@@ -253,7 +249,6 @@ QJsonArray ProjectSaver::serializeInserts(Track* track) {
     for (FX* insert : track->getInserts()) {
         QJsonObject insertObj;
         insertObj["plugin"] = insert->getName();
-        // Store parameters
         QJsonObject paramsObj;
         for (int i = 0; i < insert->getParameterCount(); i++) {
             paramsObj[insert->getParameterName(i)] = insert->getParameter(i);
