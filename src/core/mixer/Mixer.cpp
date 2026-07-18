@@ -48,3 +48,52 @@ void Mixer::mixTrack(float** trackBuffer, float** output, int numFrames, float v
         if (output[1]) output[1][i] += rightSample * rightGain;
     }
 }
+
+void Mixer::processSends(Track* track, float** output, int numFrames, const QVector<Track*>& auxTracks) {
+    if (!track || auxTracks.isEmpty()) return;
+
+    // Get send levels from track (would be stored in track)
+    // For now, we'll use a default send level
+    // In a full implementation, each track would have a send level per aux track
+    float sendLevel = 0.3f; // Default send level
+
+    // Process each aux track
+    for (Track* aux : auxTracks) {
+        if (!aux) continue;
+
+        // Allocate temporary buffer for send
+        float* sendBuffer[2] = {nullptr, nullptr};
+        sendBuffer[0] = new float[numFrames];
+        sendBuffer[1] = new float[numFrames];
+        memset(sendBuffer[0], 0, numFrames * sizeof(float));
+        memset(sendBuffer[1], 0, numFrames * sizeof(float));
+
+        // Copy track output to send buffer
+        if (output[0]) memcpy(sendBuffer[0], output[0], numFrames * sizeof(float));
+        if (output[1]) memcpy(sendBuffer[1], output[1], numFrames * sizeof(float));
+
+        // Apply send level
+        for (int i = 0; i < numFrames; i++) {
+            if (sendBuffer[0]) sendBuffer[0][i] *= sendLevel;
+            if (sendBuffer[1]) sendBuffer[1][i] *= sendLevel;
+        }
+
+        // Process the aux track with the send buffer
+        // In a real implementation, the aux track would process the send buffer
+        // and mix it back into the output or its own output
+        // For now, we'll just add it to the output
+        if (output[0] && sendBuffer[0]) {
+            for (int i = 0; i < numFrames; i++) {
+                output[0][i] += sendBuffer[0][i];
+            }
+        }
+        if (output[1] && sendBuffer[1]) {
+            for (int i = 0; i < numFrames; i++) {
+                output[1][i] += sendBuffer[1][i];
+            }
+        }
+
+        delete[] sendBuffer[0];
+        delete[] sendBuffer[1];
+    }
+}
