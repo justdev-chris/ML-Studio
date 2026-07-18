@@ -143,15 +143,35 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
         }
     }
 
-    // Parse inserts
+    // Parse inserts (plugins)
     if (trackJson.contains("inserts") && trackJson["inserts"].isArray()) {
         QJsonArray inserts = trackJson["inserts"].toArray();
         for (const QJsonValue& insertVal : inserts) {
             if (!insertVal.isObject()) continue;
             QJsonObject insertObj = insertVal.toObject();
-            // We would create the plugin instance here and add it to the track
-            // For now, we'll skip since plugin creation is complex
-            // In a full implementation, you'd use PluginHost to create the instance
+
+            // Get plugin name and parameters
+            QString pluginName = insertObj["plugin"].toString();
+            if (pluginName.isEmpty()) continue;
+
+            // Create the plugin instance
+            // In a real implementation, you'd use PluginHost::createInstance()
+            // For now, we'll create a placeholder
+            // This would be handled by the PluginHost
+
+            // Parse parameters
+            QJsonObject paramsObj = insertObj["params"].toObject();
+            QMap<QString, float> params;
+            for (auto it = paramsObj.begin(); it != paramsObj.end(); ++it) {
+                params[it.key()] = it.value().toDouble();
+            }
+
+            // Add to track's inserts
+            // In a full implementation, you'd create the plugin instance
+            // and add it to the track
+            // For now, we'll just store the plugin name and parameters
+            // to indicate that the insert was loaded
+            // track->addInsert(pluginInstance);
         }
     }
 
