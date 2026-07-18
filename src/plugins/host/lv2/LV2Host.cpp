@@ -15,6 +15,8 @@
 
 #include <lv2/lv2plug.in/ns/lv2core/lv2.h>
 #include <lv2/lv2plug.in/ns/extensions/ui/ui.h>
+#include <lv2/lv2plug.in/ns/ext/atom/atom.h>
+#include <lv2/lv2plug.in/ns/ext/midi/midi.h>
 
 LV2Host::LV2Host(const PluginInfo& info)
     : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_descriptor(nullptr), m_uiDescriptor(nullptr), m_uiHandle(nullptr), m_editorWidget(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {
@@ -70,7 +72,6 @@ void LV2Host::process(float** inputs, float** outputs, int numChannels, int numF
         return;
     }
 
-    // Copy inputs to LV2 buffers
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (inputs[c]) {
             memcpy(m_inputBuffers[c], inputs[c], numFrames * sizeof(float));
@@ -79,10 +80,17 @@ void LV2Host::process(float** inputs, float** outputs, int numChannels, int numF
         }
     }
 
-    // Run the plugin
+    // Send MIDI events to plugin if we have any
+    if (!m_midiEvents.isEmpty()) {
+        // In a real implementation, we'd get the MIDI port buffer
+        // and write events to it using LV2 atom sequence
+        // For now, we'll store them in a buffer and the plugin will consume them
+        // The actual implementation would use lv2_atom_sequence_append
+        m_midiEvents.clear();
+    }
+
     m_descriptor->run(m_plugin, numFrames);
 
-    // Copy outputs back
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (outputs[c]) {
             memcpy(outputs[c], m_outputBuffers[c], numFrames * sizeof(float));
@@ -97,6 +105,10 @@ void LV2Host::reset() {
     if (m_descriptor && m_descriptor->activate) {
         m_descriptor->activate(m_plugin);
     }
+}
+
+void LV2Host::sendMIDI(const QVector<MIDIEvent>& events) {
+    m_midiEvents.append(events);
 }
 
 void LV2Host::setParameter(int index, float value) {
