@@ -9,9 +9,11 @@
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
     , m_transport(new Transport(this))
-    , m_mixer(new Mixer(this)) {
+    , m_mixer(new Mixer(this))
+    , m_recordingClip(nullptr)
+    , m_recordingTrack(nullptr) {
     connectTransportSignals();
-    m_recordBuffer.reserve(44100 * 60 * 10); // 10 minutes at 44.1kHz
+    m_recordBuffer.reserve(44100 * 60 * 10);
 }
 
 AudioEngine::~AudioEngine() {
@@ -68,8 +70,7 @@ void AudioEngine::play() {
 void AudioEngine::stop() {
     if (!m_initialized) return;
     m_transport->stop();
-    // Finalize recording if active
-    if (m_transport->isRecording() && m_recordingClip) {
+    if (m_recordingClip) {
         finalizeRecording();
     }
     emit transportStateChanged(false);
@@ -247,7 +248,7 @@ void AudioEngine::processAudio(float** input, float** output, int numChannels, i
         if (output[c]) memset(output[c], 0, numFrames * sizeof(float));
     }
 
-    // Handle recording first
+    // Handle recording
     handleRecording(input, numChannels, numFrames);
 
     // Process tracks
@@ -322,7 +323,6 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
         return;
     }
 
-    // Find armed audio track
     Track* armedTrack = nullptr;
     for (Track* track : m_tracks) {
         if (track->isRecordArmed() && track->getType() == TrackType::Audio) {
@@ -332,7 +332,6 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
     }
     if (!armedTrack || !input[0]) return;
 
-    // Start recording clip if needed
     if (!m_recordingClip || m_recordingTrack != armedTrack) {
         m_recordingTrack = armedTrack;
         m_recordingClip = new AudioClip(armedTrack);
@@ -342,7 +341,6 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
         armedTrack->addClip(m_recordingClip);
     }
 
-    // Append input to buffer
     int numSamples = numFrames * numChannels;
     for (int i = 0; i < numSamples; i++) {
         m_recordBuffer.append(input[i % numChannels]);
@@ -359,7 +357,6 @@ void AudioEngine::finalizeRecording() {
         return;
     }
 
-    // Write recorded audio to disk
     if (!m_recordPath.isEmpty()) {
         QString fileName = m_recordPath + "/" + m_recordingClip->getName() + ".wav";
         SF_INFO info;
@@ -376,7 +373,6 @@ void AudioEngine::finalizeRecording() {
         }
     }
 
-    // Store the recorded audio in the clip
     m_recordingClip->setAudioData(m_recordBuffer);
     m_recordingClip->setLength(m_recordBuffer.size());
 
