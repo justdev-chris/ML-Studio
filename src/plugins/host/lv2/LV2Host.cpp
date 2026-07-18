@@ -17,9 +17,10 @@
 #include <lv2/lv2plug.in/ns/extensions/ui/ui.h>
 #include <lv2/lv2plug.in/ns/ext/atom/atom.h>
 #include <lv2/lv2plug.in/ns/ext/midi/midi.h>
+#include <lv2/lv2plug.in/ns/ext/urid/urid.h>
 
 LV2Host::LV2Host(const PluginInfo& info)
-    : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_descriptor(nullptr), m_uiDescriptor(nullptr), m_uiHandle(nullptr), m_editorWidget(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {
+    : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_descriptor(nullptr), m_uiDescriptor(nullptr), m_uiHandle(nullptr), m_editorWidget(nullptr), m_midiInputPort(nullptr), m_midiOutputPort(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {
     for (int i = 0; i < 2; i++) {
         m_inputBuffers[i] = nullptr;
         m_outputBuffers[i] = nullptr;
@@ -61,6 +62,7 @@ void LV2Host::shutdown() {
     unloadPlugin();
     m_initialized = false;
     m_parameterCache.clear();
+    m_midiEvents.clear();
 }
 
 void LV2Host::process(float** inputs, float** outputs, int numChannels, int numFrames) {
@@ -80,16 +82,26 @@ void LV2Host::process(float** inputs, float** outputs, int numChannels, int numF
         }
     }
 
-    // Send MIDI events to plugin if we have any
-    if (!m_midiEvents.isEmpty()) {
-        // In a real implementation, we'd get the MIDI port buffer
-        // and write events to it using LV2 atom sequence
-        // For now, we'll store them in a buffer and the plugin will consume them
-        // The actual implementation would use lv2_atom_sequence_append
+    if (m_midiInputPort && !m_midiEvents.isEmpty()) {
+        LV2_Atom_Sequence* seq = (LV2_Atom_Sequence*)m_midiInputPort;
+        lv2_atom_sequence_clear(seq);
+        for (const MIDIEvent& ev : m_midiEvents) {
+            uint8_t midiBytes[3] = {
+                0x90 | (ev.channel & 0x0F),
+                (uint8_t)ev.note,
+                (uint8_t)ev.velocity
+            };
+            lv2_atom_sequence_append(seq, ev.start, midiBytes, 3);
+        }
         m_midiEvents.clear();
     }
 
     m_descriptor->run(m_plugin, numFrames);
+
+    if (m_midiOutputPort) {
+        LV2_Atom_Sequence* seq = (LV2_Atom_Sequence*)m_midiOutputPort;
+        // Output MIDI events can be read here if needed
+    }
 
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (outputs[c]) {
@@ -105,10 +117,6 @@ void LV2Host::reset() {
     if (m_descriptor && m_descriptor->activate) {
         m_descriptor->activate(m_plugin);
     }
-}
-
-void LV2Host::sendMIDI(const QVector<MIDIEvent>& events) {
-    m_midiEvents.append(events);
 }
 
 void LV2Host::setParameter(int index, float value) {
@@ -297,4 +305,35 @@ void LV2Host::unloadPlugin() {
 #endif
     m_descriptor = nullptr;
     m_uiDescriptor = nullptr;
+    m_midiInputPort = nullptr;
+    m_midiOutputPort = nullptr;
 }
+
+// Platform-specific library loading
+#ifdef _WIN32
+LV2Host::HMODULE LV2Host::loadLibrary(const QString& path) {
+    return reinterpret_cast<HMODULE>(::LoadLibraryW(path.toStdWString().c_str()));
+}
+
+void LV2Host::unloadLibrary(HMODULE handle) {
+    if (handle) ::FreeLibrary(reinterpret_cast<HMODULE>(handle));
+}
+
+void* LV2Host::getFunction(HMODULE handle, const char* name) {
+    if (!handle) return nullptr;
+    return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(handle), name));
+}
+#else
+LV2Host::HMODULE LV2Host::loadLibrary(const QString& path) {
+    return dlopen(path.toUtf8().constData(), RTLD_LAZY);
+}
+
+void LV2Host::unloadLibrary(HMODULE handle) {
+    if (handle) dlclose(handle);
+}
+
+void* LV2Host::getFunction(HMODULE handle, const char* name) {
+    if (!handle) return nullptr;
+    return dlsym(handle, name);
+}
+#endif
