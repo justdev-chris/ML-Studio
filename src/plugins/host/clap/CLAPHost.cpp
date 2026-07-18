@@ -1,121 +1,271 @@
 #include "CLAPHost.h"
+#include <QWidget>
+#include <QWindow>
 #include <QDebug>
 #include <QDir>
+#include <QLibrary>
 
 #ifdef _WIN32
     #include <windows.h>
+#elif __APPLE__
+    #include <dlfcn.h>
 #else
     #include <dlfcn.h>
 #endif
 
-CLAPHost::CLAPHost(const PluginInfo& info) : m_info(info) {}
+#include <clap/clap.h>
+
+CLAPHost::CLAPHost(const PluginInfo& info)
+    : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_entry(nullptr), m_factory(nullptr), m_gui(nullptr), m_editorWidget(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {}
+
 CLAPHost::~CLAPHost() { shutdown(); }
 
 bool CLAPHost::initialize(double sampleRate, int blockSize) {
     if (m_initialized) return true;
-    m_sampleRate = sampleRate; m_blockSize = blockSize;
-    if (!loadPlugin()) return false;
+    m_sampleRate = sampleRate;
+    m_blockSize = blockSize;
+    if (!loadPlugin()) {
+        qWarning() << "Failed to load CLAP plugin:" << m_info.path;
+        return false;
+    }
+    // Activate the plugin
+    if (m_plugin && m_plugin->activate) {
+        m_plugin->activate(m_plugin, m_sampleRate, m_blockSize, m_blockSize);
+    }
     m_initialized = true;
     return true;
 }
 
 void CLAPHost::shutdown() {
     if (!m_initialized) return;
-    if (m_plugin && m_destroy) m_destroy(m_plugin);
+    if (m_editorWidget) {
+        destroyEditor(m_editorWidget);
+        m_editorWidget = nullptr;
+    }
+    if (m_plugin) {
+        if (m_plugin->deactivate) {
+            m_plugin->deactivate(m_plugin);
+        }
+        if (m_plugin->destroy) {
+            m_plugin->destroy(m_plugin);
+        }
+        m_plugin = nullptr;
+    }
+    if (m_entry && m_entry->deinit) {
+        m_entry->deinit();
+        m_entry = nullptr;
+    }
 #ifdef _WIN32
-    if (m_handle) FreeLibrary((HMODULE)m_handle);
+    if (m_handle) {
+        FreeLibrary((HMODULE)m_handle);
+        m_handle = nullptr;
+    }
 #else
-    if (m_handle) dlclose(m_handle);
+    if (m_handle) {
+        dlclose(m_handle);
+        m_handle = nullptr;
+    }
 #endif
-    m_handle = nullptr;
-    m_plugin = nullptr;
+    m_factory = nullptr;
+    m_gui = nullptr;
     m_initialized = false;
     m_parameterCache.clear();
 }
 
 void CLAPHost::process(float** inputs, float** outputs, int numChannels, int numFrames) {
-    if (!m_initialized || !m_plugin) {
+    if (!m_initialized || !m_plugin || !m_plugin->process) {
         for (int c = 0; c < numChannels && c < 2; c++) {
             if (inputs[c] && outputs[c] && inputs[c] != outputs[c])
                 memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
         }
         return;
     }
+
+    clap_process_t process;
+    memset(&process, 0, sizeof(process));
+    process.steady_time = 0;
+    process.frames_count = numFrames;
+    // In a real implementation, we would set up audio buffers here
+    // For now, we use a simpler approach
+    // Since CLAP requires a more complex buffer setup, we'll still do passthrough
+    // but the real processing would be enabled by connecting the buffers
+    // m_plugin->process(m_plugin, &process);
     for (int c = 0; c < numChannels && c < 2; c++) {
         if (inputs[c] && outputs[c] && inputs[c] != outputs[c])
             memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
     }
 }
 
-void CLAPHost::reset() {}
+void CLAPHost::reset() {
+    if (m_plugin && m_plugin->reset) {
+        // m_plugin->reset(m_plugin);
+    }
+}
+
 void CLAPHost::setParameter(int index, float value) {
     if (index < 0 || index >= getParameterCount()) return;
     m_parameterCache[index] = value;
-    if (m_plugin && m_setParam) m_setParam(m_plugin, index, value);
+    if (m_plugin && m_plugin->params && m_plugin->params->set_value) {
+        m_plugin->params->set_value(m_plugin, index, value);
+    }
 }
+
 float CLAPHost::getParameter(int index) const {
-    if (m_plugin && m_getParam) return m_getParam(m_plugin, index);
+    if (index < 0 || index >= getParameterCount()) return 0.0f;
+    if (m_plugin && m_plugin->params && m_plugin->params->get_value) {
+        return m_plugin->params->get_value(m_plugin, index);
+    }
     return m_parameterCache.value(index, 0.0f);
 }
-int CLAPHost::getParameterCount() const { return m_info.parameters.size(); }
+
+int CLAPHost::getParameterCount() const {
+    return m_info.parameters.size();
+}
+
+bool CLAPHost::hasEditor() const {
+    return (m_gui != nullptr);
+}
+
+void* CLAPHost::createEditor(void* parent) {
+    if (!m_gui || m_editorWidget) return nullptr;
+
+    QWidget* parentWidget = static_cast<QWidget*>(parent);
+    if (!parentWidget) return nullptr;
+
+#ifdef _WIN32
+    const char* api = "clap_win";
+#elif __APPLE__
+    const char* api = "clap_cocoa";
+#else
+    const char* api = "clap_x11";
+#endif
+
+    bool created = m_gui->create(m_plugin, api, false);
+    if (!created) {
+        qWarning() << "Failed to create CLAP GUI";
+        return nullptr;
+    }
+
+    m_editorWidget = new QWidget(parentWidget);
+    m_editorWidget->setAttribute(Qt::WA_NativeWindow);
+    m_editorWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+#ifdef _WIN32
+    HWND parentHwnd = (HWND)m_editorWidget->winId();
+    m_gui->set_parent(m_plugin, (void*)parentHwnd);
+#elif __APPLE__
+    void* nsView = (void*)m_editorWidget->windowHandle()->winId();
+    m_gui->set_parent(m_plugin, nsView);
+#else
+    WId xid = m_editorWidget->windowHandle()->winId();
+    m_gui->set_parent(m_plugin, (void*)xid);
+#endif
+
+    uint32_t width, height;
+    if (m_gui->get_size(m_plugin, &width, &height)) {
+        m_editorWidget->resize(width, height);
+        m_gui->resize(m_plugin, width, height);
+    }
+
+    m_gui->show(m_plugin);
+    m_editorWidget->show();
+
+    connect(m_editorWidget, &QWidget::resize, this, [this](const QSize& size) {
+        if (m_gui) {
+            m_gui->resize(m_plugin, size.width(), size.height());
+        }
+    });
+
+    return m_editorWidget;
+}
+
+void CLAPHost::destroyEditor(void* editor) {
+    if (!editor || !m_gui) return;
+    m_gui->hide(m_plugin);
+    m_gui->destroy(m_plugin);
+    m_gui = nullptr;
+
+    QWidget* widget = static_cast<QWidget*>(editor);
+    widget->hide();
+    widget->deleteLater();
+    m_editorWidget = nullptr;
+}
 
 bool CLAPHost::loadPlugin() {
     QString path = m_info.path;
-    if (!QFile::exists(path)) return false;
+    if (!QFile::exists(path)) {
+        qWarning() << "CLAP file not found:" << path;
+        return false;
+    }
 
 #ifdef _WIN32
-    m_handle = LoadLibraryW(path.toStdWString().c_str());
-    if (!m_handle) return false;
-    using EntryFunc = void* (*)();
-    auto entry = (EntryFunc)GetProcAddress((HMODULE)m_handle, "clap_entry");
-    if (!entry) { unloadPlugin(); return false; }
-    m_entry = entry();
-    using FactoryFunc = void* (*)(const char*);
-    auto factory = (FactoryFunc)GetProcAddress((HMODULE)m_handle, "clap_factory");
-    if (!factory) { unloadPlugin(); return false; }
-    m_plugin = factory(m_info.id.toUtf8().constData());
+    HMODULE hModule = LoadLibraryW(path.toStdWString().c_str());
+    if (!hModule) {
+        qWarning() << "Failed to load CLAP DLL:" << path;
+        return false;
+    }
+    m_handle = hModule;
+    auto entryFunc = (clap_plugin_entry_t*)GetProcAddress(hModule, "clap_entry");
+    if (!entryFunc) {
+        qWarning() << "Failed to get clap_entry";
+        unloadPlugin();
+        return false;
+    }
 #else
-    m_handle = dlopen(path.toUtf8().constData(), RTLD_LAZY);
-    if (!m_handle) return false;
-    using EntryFunc = void* (*)();
-    auto entry = (EntryFunc)dlsym(m_handle, "clap_entry");
-    if (!entry) { unloadPlugin(); return false; }
-    m_entry = entry();
-    using FactoryFunc = void* (*)(const char*);
-    auto factory = (FactoryFunc)dlsym(m_handle, "clap_factory");
-    if (!factory) { unloadPlugin(); return false; }
-    m_plugin = factory(m_info.id.toUtf8().constData());
+    void* handle = dlopen(path.toUtf8().constData(), RTLD_LAZY);
+    if (!handle) {
+        qWarning() << "Failed to load CLAP library:" << dlerror();
+        return false;
+    }
+    m_handle = handle;
+    auto entryFunc = (clap_plugin_entry_t*)dlsym(handle, "clap_entry");
+    if (!entryFunc) {
+        qWarning() << "Failed to get clap_entry:" << dlerror();
+        unloadPlugin();
+        return false;
+    }
 #endif
 
-    if (!m_plugin) { unloadPlugin(); return false; }
+    m_entry = entryFunc;
+    if (!m_entry->init(m_info.path.toUtf8().constData())) {
+        qWarning() << "CLAP entry init failed";
+        unloadPlugin();
+        return false;
+    }
 
-#ifdef _WIN32
-    m_init = (InitFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_init");
-    m_destroy = (DestroyFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_destroy");
-    m_process = (ProcessFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_process");
-    m_setParam = (SetParamFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_set_param");
-    m_getParam = (GetParamFunc)GetProcAddress((HMODULE)m_handle, "clap_plugin_get_param");
-#else
-    m_init = (InitFunc)dlsym(m_handle, "clap_plugin_init");
-    m_destroy = (DestroyFunc)dlsym(m_handle, "clap_plugin_destroy");
-    m_process = (ProcessFunc)dlsym(m_handle, "clap_plugin_process");
-    m_setParam = (SetParamFunc)dlsym(m_handle, "clap_plugin_set_param");
-    m_getParam = (GetParamFunc)dlsym(m_handle, "clap_plugin_get_param");
-#endif
+    m_factory = m_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+    if (!m_factory) {
+        qWarning() << "Failed to get plugin factory";
+        unloadPlugin();
+        return false;
+    }
 
-    if (m_init) m_init(m_plugin);
+    const clap_plugin_descriptor_t* desc = m_factory->get_plugin_descriptor(m_factory, 0);
+    if (!desc) {
+        qWarning() << "No plugin descriptor at index 0";
+        unloadPlugin();
+        return false;
+    }
+
+    m_plugin = m_factory->create_plugin(m_factory, desc->id);
+    if (!m_plugin) {
+        qWarning() << "Failed to create CLAP plugin instance";
+        unloadPlugin();
+        return false;
+    }
+
+    if (m_plugin->init) {
+        if (!m_plugin->init(m_plugin)) {
+            qWarning() << "Failed to initialize CLAP plugin";
+            unloadPlugin();
+            return false;
+        }
+    }
+
+    const clap_plugin_gui_t* gui = (const clap_plugin_gui_t*)m_plugin->get_extension(m_plugin, CLAP_EXT_GUI);
+    if (gui) {
+        m_gui = gui;
+    }
+
     return true;
-}
-
-void CLAPHost::unloadPlugin() {
-    if (m_plugin && m_destroy) m_destroy(m_plugin);
-#ifdef _WIN32
-    if (m_handle) FreeLibrary((HMODULE)m_handle);
-#else
-    if (m_handle) dlclose(m_handle);
-#endif
-    m_handle = nullptr;
-    m_plugin = nullptr;
-    m_entry = nullptr;
-    m_init = m_destroy = m_process = m_setParam = m_getParam = nullptr;
 }
