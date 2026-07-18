@@ -1,0 +1,71 @@
+name: Build MeowyLoops Studio (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (Windows)
+        run: |
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+          choco install qt6 portaudio libsndfile rtmidi
+          choco install git
+          echo "C:\Program Files\CMake\bin" >> $env:GITHUB_PATH
+          echo "C:\Qt\6.7.1\msvc2019_64\bin" >> $env:GITHUB_PATH
+
+      - name: Download VST3 SDK
+        run: |
+          mkdir -p libs/vst3sdk
+          curl -L -o libs/vst3sdk/vst3sdk.zip "https://github.com/steinbergmedia/vst3sdk/archive/refs/tags/v3.7.11.zip"
+          cd libs/vst3sdk
+          unzip -q vst3sdk.zip
+          mv vst3sdk-*/* .
+          rm -rf vst3sdk-*
+          rm vst3sdk.zip
+        shell: bash
+
+      - name: Download LV2 SDK
+        run: |
+          mkdir -p libs/lv2
+          curl -L -o libs/lv2/lv2.zip "https://github.com/lv2/lv2/archive/refs/tags/v1.18.10.zip"
+          cd libs/lv2
+          unzip -q lv2.zip
+          mv lv2-*/* .
+          rm -rf lv2-*
+          rm lv2.zip
+        shell: bash
+
+      - name: Download CLAP SDK
+        run: |
+          mkdir -p libs/clap
+          curl -L -o libs/clap/clap.zip "https://github.com/free-audio/clap/archive/refs/tags/v1.1.9.zip"
+          cd libs/clap
+          unzip -q clap.zip
+          mv clap-*/* .
+          rm -rf clap-*
+          rm clap.zip
+        shell: bash
+
+      - name: Configure CMake
+        run: |
+          cmake -B build ^
+            -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
+            -DUSE_SYSTEM_LIBS=OFF ^
+            -DCMAKE_PREFIX_PATH="C:/Qt/6.7.1/msvc2019_64"
+
+      - name: Build
+        run: cmake --build build --config %BUILD_TYPE% --parallel
+
+      - name: Upload Artifact (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeowyLoopsStudio-Windows
+          path: build/Release/MeowyLoopsStudio.exe
