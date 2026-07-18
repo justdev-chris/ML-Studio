@@ -20,13 +20,9 @@ bool MIDI::initialize() {
         m_midiIn = new RtMidiIn();
         m_midiOut = new RtMidiOut();
         m_initialized = true;
-
-        // Setup clock timer
         m_clockTimer = new QTimer(this);
         connect(m_clockTimer, &QTimer::timeout, this, &MIDI::sendClock);
-        m_clockTimer->setInterval(20833); // 24ppq at 120 BPM (in microseconds)
         m_clockTimer->stop();
-
         return true;
     } catch (const std::exception& e) {
         emit error(QString("MIDI init: %1").arg(e.what()));
@@ -187,30 +183,22 @@ bool MIDI::sendPitchBend(int channel, int value) {
 
 void MIDI::sendClock() {
     if (!m_outputOpen) return;
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Clock;
-    sendMessage(msg);
+    MIDIMessage msg; msg.type = MIDIMessage::Clock; sendMessage(msg);
 }
 
 void MIDI::sendStart() {
     if (!m_outputOpen) return;
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Start;
-    sendMessage(msg);
+    MIDIMessage msg; msg.type = MIDIMessage::Start; sendMessage(msg);
 }
 
 void MIDI::sendContinue() {
     if (!m_outputOpen) return;
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Continue;
-    sendMessage(msg);
+    MIDIMessage msg; msg.type = MIDIMessage::Continue; sendMessage(msg);
 }
 
 void MIDI::sendStop() {
     if (!m_outputOpen) return;
-    MIDIMessage msg;
-    msg.type = MIDIMessage::Stop;
-    sendMessage(msg);
+    MIDIMessage msg; msg.type = MIDIMessage::Stop; sendMessage(msg);
 }
 
 void MIDI::setTransport(Transport* transport) {
@@ -224,9 +212,8 @@ void MIDI::setTransport(Transport* transport) {
         if (playing) {
             sendStart();
             if (m_clockTimer) {
-                // Calculate timer interval based on tempo
                 double bpm = m_transport->getTempo();
-                int interval = static_cast<int>(60000000.0 / (bpm * 24.0)); // 24ppq
+                int interval = static_cast<int>(60000000.0 / (bpm * 24.0));
                 m_clockTimer->setInterval(interval);
                 m_clockTimer->start();
             }
@@ -241,12 +228,6 @@ void MIDI::setTransport(Transport* transport) {
             int interval = static_cast<int>(60000000.0 / (bpm * 24.0));
             m_clockTimer->setInterval(interval);
         }
-    });
-
-    connect(transport, &Transport::positionChanged, this, [this](double position) {
-        // Optionally send song position pointer (SMPTE)
-        // This would be implemented for advanced sync
-        Q_UNUSED(position);
     });
 }
 
