@@ -27,8 +27,8 @@ jobs:
           curl -L -o libs/vst3sdk/vst3sdk.zip "https://www.steinberg.net/vst3sdk"
           cd libs/vst3sdk
           unzip -q vst3sdk.zip
-          mv vst3sdk-*/* .
-          rm -rf vst3sdk-*
+          mv VST_SDK/* .
+          rm -rf VST_SDK
           rm vst3sdk.zip
         shell: bash
 
