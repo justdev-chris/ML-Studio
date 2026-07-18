@@ -124,6 +124,7 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
     if (trackJson.contains("solo")) track->setSoloed(trackJson["solo"].toBool(false));
     if (trackJson.contains("recordArm")) track->setRecordArmed(trackJson["recordArm"].toBool(false));
 
+    // Parse clips
     if (trackJson.contains("clips") && trackJson["clips"].isArray()) {
         QJsonArray clips = trackJson["clips"].toArray();
         for (int i = 0; i < clips.size(); i++) {
@@ -141,6 +142,19 @@ bool ProjectLoader::parseTrack(const QJsonObject& trackJson, Track* track, const
             }
         }
     }
+
+    // Parse inserts
+    if (trackJson.contains("inserts") && trackJson["inserts"].isArray()) {
+        QJsonArray inserts = trackJson["inserts"].toArray();
+        for (const QJsonValue& insertVal : inserts) {
+            if (!insertVal.isObject()) continue;
+            QJsonObject insertObj = insertVal.toObject();
+            // We would create the plugin instance here and add it to the track
+            // For now, we'll skip since plugin creation is complex
+            // In a full implementation, you'd use PluginHost to create the instance
+        }
+    }
+
     return true;
 }
 
