@@ -7,13 +7,17 @@ Mixer::Mixer(QObject* parent)
 
 Mixer::~Mixer() {}
 
+void Mixer::setSampleRate(int sampleRate) {
+    m_sampleRate = sampleRate;
+}
+
+void Mixer::setBufferSize(int bufferSize) {
+    m_bufferSize = bufferSize;
+}
+
 void Mixer::setMasterVolume(float volume) {
-    if (volume < 0.0f) volume = 0.0f;
-    if (volume > 2.0f) volume = 2.0f;
-    if (m_masterVolume != volume) {
-        m_masterVolume = volume;
-        emit masterVolumeChanged(volume);
-    }
+    m_masterVolume = qBound(0.0f, volume, 2.0f);
+    emit masterVolumeChanged(m_masterVolume);
 }
 
 void Mixer::reset() {
@@ -28,16 +32,14 @@ void Mixer::mixTrack(float** trackBuffer, float** output, int numFrames, float v
 
     QMutexLocker locker(&m_mutex);
 
-    // Calculate left/right gain based on pan (-1.0 to 1.0)
-    // Pan law: constant power
+    // Apply pan law (constant power)
     float leftGain = (pan <= 0.0f) ? 1.0f : (1.0f - pan);
     float rightGain = (pan >= 0.0f) ? 1.0f : (1.0f + pan);
 
-    // Apply volume
+    // Apply track volume and master volume
     leftGain *= volume * m_masterVolume;
     rightGain *= volume * m_masterVolume;
 
-    // Mix
     for (int i = 0; i < numFrames; i++) {
         float leftSample = trackBuffer[0] ? trackBuffer[0][i] : 0.0f;
         float rightSample = trackBuffer[1] ? trackBuffer[1][i] : leftSample;
