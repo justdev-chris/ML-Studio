@@ -4,49 +4,32 @@
 #include <QFile>
 #include <cstring>
 #include <cmath>
-
-// ----------------------------------------------------------------------------
-// Clip base class
-// ----------------------------------------------------------------------------
+#include <sndfile.h>
 
 Clip::Clip(QObject* parent)
     : QObject(parent)
     , m_type(ClipType::Audio)
     , m_name("Clip")
-    , m_color(QColor(100, 150, 200)) {
-}
+    , m_color(QColor(100, 150, 200)) {}
 
 Clip::~Clip() {}
 
-// ----------------------------------------------------------------------------
-// AudioClip
-// ----------------------------------------------------------------------------
-
-AudioClip::AudioClip(QObject* parent)
-    : Clip(parent) {
+AudioClip::AudioClip(QObject* parent) : Clip(parent) {
     m_type = ClipType::Audio;
     m_name = "Audio Clip";
 }
 
 AudioClip::~AudioClip() {
-    if (m_audioData) {
-        delete[] m_audioData;
-        m_audioData = nullptr;
-    }
+    if (m_audioData) delete[] m_audioData;
 }
 
 bool AudioClip::loadFromFile(const QString& filePath) {
     if (filePath.isEmpty()) return false;
-
-    // Check if file exists
-    if (!FileUtils::exists(filePath)) {
+    if (!QFile::exists(filePath)) {
         qWarning() << "Audio file not found:" << filePath;
         return false;
     }
 
-    m_filePath = filePath;
-
-    // Use libsndfile to load audio
     SF_INFO info;
     SNDFILE* file = sf_open(filePath.toUtf8().constData(), SFM_READ, &info);
     if (!file) {
@@ -54,98 +37,88 @@ bool AudioClip::loadFromFile(const QString& filePath) {
         return false;
     }
 
-    // Allocate buffer
+    m_filePath = filePath;
     int numFrames = info.frames;
     int numChannels = info.channels;
     m_dataLength = numFrames * numChannels;
     m_audioData = new float[m_dataLength];
 
-    // Read audio data
     sf_read_float(file, m_audioData, m_dataLength);
     sf_close(file);
 
-    qDebug() << "Loaded audio clip:" << filePath << numFrames << "frames," << numChannels << "channels";
-
-    // Update clip length based on audio duration
     int sampleRate = info.samplerate;
-    if (sampleRate > 0) {
-        m_length = numFrames;
-    }
+    if (sampleRate > 0) m_length = numFrames;
 
+    qDebug() << "Loaded audio clip:" << filePath << numFrames << "frames," << numChannels << "channels";
     return true;
 }
 
 void AudioClip::setGain(float gain) {
-    if (gain < 0.0f) gain = 0.0f;
-    if (gain > 4.0f) gain = 4.0f;
-    m_gain = gain;
+    m_gain = qBound(0.0f, gain, 4.0f);
 }
 
 void AudioClip::setPitch(float pitch) {
-    if (pitch < 0.5f) pitch = 0.5f;
-    if (pitch > 2.0f) pitch = 2.0f;
-    m_pitch = pitch;
+    m_pitch = qBound(0.5f, pitch, 2.0f);
 }
 
 void AudioClip::process(float** output, int numFrames) {
     if (!m_active || !m_audioData || m_dataLength == 0) return;
-    if (!output[0] && !output[1]) return;
 
-    // Calculate how many samples to process
     int samplesToCopy = numFrames;
     if (m_playhead + samplesToCopy > m_dataLength) {
         samplesToCopy = m_dataLength - m_playhead;
     }
-
     if (samplesToCopy <= 0) return;
 
-    // Copy audio data to output buffer with gain applied
-    for (int i = 0; i < samplesToCopy; i++) {
-        float sample = m_audioData[m_playhead + i] * m_gain;
-
-        // Apply pitch shift (simple resampling - not implemented yet)
-        if (m_pitch != 1.0f) {
-            // TODO: Implement pitch shifting
+    // Pitch shift using linear interpolation
+    if (m_pitch != 1.0f) {
+        float pitch = m_pitch;
+        for (int i = 0; i < samplesToCopy; i++) {
+            float index = (m_playhead + i) * pitch;
+            int idx0 = (int)index;
+            int idx1 = idx0 + 1;
+            float frac = index - idx0;
+            if (idx1 >= m_dataLength) break;
+            float sample = (m_audioData[idx0] * (1 - frac) + m_audioData[idx1] * frac) * m_gain;
+            if (output[0]) output[0][i] += sample;
+            if (output[1]) output[1][i] += sample;
         }
-
-        if (output[0]) output[0][i] += sample;
-        if (output[1]) output[1][i] += sample;
+        m_playhead += samplesToCopy * pitch;
+    } else {
+        for (int i = 0; i < samplesToCopy; i++) {
+            float sample = m_audioData[m_playhead + i] * m_gain;
+            if (output[0]) output[0][i] += sample;
+            if (output[1]) output[1][i] += sample;
+        }
+        m_playhead += samplesToCopy;
     }
-
-    m_playhead += samplesToCopy;
 }
 
 void AudioClip::update(double position) {
-    // Update playhead based on transport position
-    // The clip's start position determines where it plays from
-    // position is in seconds, m_start is in samples
-    if (m_active) {
-        double sampleRate = 44100.0; // Should come from engine
-        double clipStartTime = static_cast<double>(m_start) / sampleRate;
-        double clipEndTime = static_cast<double>(m_start + m_length) / sampleRate;
+    double sampleRate = 44100.0;
+    double clipStartTime = m_start / sampleRate;
+    double clipEndTime = (m_start + m_length) / sampleRate;
 
-        if (position >= clipStartTime && position < clipEndTime) {
-            double offset = position - clipStartTime;
-            int newPlayhead = static_cast<int>(offset * sampleRate);
-            if (newPlayhead < m_dataLength) {
-                m_playhead = newPlayhead;
-            } else {
-                m_playhead = m_dataLength - 1;
-            }
-        } else if (position >= clipEndTime) {
-            m_playhead = m_dataLength - 1;
-        } else {
-            m_playhead = 0;
-        }
+    if (position >= clipStartTime && position < clipEndTime) {
+        double offset = position - clipStartTime;
+        int newPlayhead = offset * sampleRate;
+        if (newPlayhead < m_dataLength) m_playhead = newPlayhead;
+        else m_playhead = m_dataLength - 1;
+    } else if (position >= clipEndTime) {
+        m_playhead = m_dataLength - 1;
+    } else {
+        m_playhead = 0;
     }
 }
 
-// ----------------------------------------------------------------------------
-// MIDIClip
-// ----------------------------------------------------------------------------
+void AudioClip::setAudioData(const QVector<float>& data) {
+    m_dataLength = data.size();
+    if (m_audioData) delete[] m_audioData;
+    m_audioData = new float[m_dataLength];
+    memcpy(m_audioData, data.data(), m_dataLength * sizeof(float));
+}
 
-MIDIClip::MIDIClip(QObject* parent)
-    : Clip(parent) {
+MIDIClip::MIDIClip(QObject* parent) : Clip(parent) {
     m_type = ClipType::MIDI;
     m_name = "MIDI Clip";
 }
@@ -167,38 +140,29 @@ void MIDIClip::clearEvents() {
 
 void MIDIClip::process(float** output, int numFrames) {
     // MIDI clips don't produce audio directly
-    // They send MIDI events to the synthesizer
-    // This is handled by the MIDI output system
     Q_UNUSED(output);
     Q_UNUSED(numFrames);
 }
 
 void MIDIClip::update(double position) {
-    // Check if position is within clip range
-    double sampleRate = 44100.0; // Should come from engine
-    double clipStartTime = static_cast<double>(m_start) / sampleRate;
-    double clipEndTime = static_cast<double>(m_start + m_length) / sampleRate;
+    double sampleRate = 44100.0;
+    double clipStartTime = m_start / sampleRate;
+    double clipEndTime = (m_start + m_length) / sampleRate;
 
     if (position >= clipStartTime && position < clipEndTime) {
         m_active = true;
-        // Trigger MIDI events based on position
-        // Events are stored in ticks, need to convert to time
         double clipPosition = position - clipStartTime;
 
-        // Check each event
         for (const MIDIEvent& event : m_events) {
-            double eventTime = static_cast<double>(event.start) / 480.0; // 480 ticks per quarter note
-            double eventEndTime = static_cast<double>(event.start + event.length) / 480.0;
+            double eventTime = event.start / 480.0;
+            double eventEndTime = (event.start + event.length) / 480.0;
 
             if (clipPosition >= eventTime && clipPosition < eventEndTime) {
-                // Note should be playing
-                // Send MIDI note on if not already triggered
                 if (!m_triggeredEvents.contains(event.note)) {
                     m_triggeredEvents.insert(event.note);
                     emit midiNoteOn(event.note, event.velocity);
                 }
             } else if (clipPosition >= eventEndTime) {
-                // Note should be off
                 if (m_triggeredEvents.contains(event.note)) {
                     m_triggeredEvents.remove(event.note);
                     emit midiNoteOff(event.note);
@@ -206,7 +170,6 @@ void MIDIClip::update(double position) {
             }
         }
     } else if (position >= clipEndTime) {
-        // Clip ended, turn off all notes
         for (int note : m_triggeredEvents) {
             emit midiNoteOff(note);
         }
