@@ -46,8 +46,7 @@ jobs:
       - name: Download CLAP SDK
         run: |
           mkdir -p libs/clap || mkdir libs/clap
-          curl -L -o libs/clap/clap.zip "https://github.com/free-audio/clap/archive/refs/tags/v1.1.9.zip"
-          cd libs/clap
+          curl -L -o libs/clap/clap.zip "https://github.com/free-audio/clap/archive/refs/tags/1.1.9.zip"
           unzip -q clap.zip
           mv clap-*/* .
           rm -rf clap-*
