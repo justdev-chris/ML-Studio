@@ -16,7 +16,12 @@
 #include <clap/clap.h>
 
 CLAPHost::CLAPHost(const PluginInfo& info)
-    : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_entry(nullptr), m_factory(nullptr), m_gui(nullptr), m_editorWidget(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {}
+    : m_info(info), m_handle(nullptr), m_plugin(nullptr), m_entry(nullptr), m_factory(nullptr), m_gui(nullptr), m_editorWidget(nullptr), m_initialized(false), m_sampleRate(44100.0), m_blockSize(256) {
+    for (int i = 0; i < 2; i++) {
+        m_inputBuffers[i] = nullptr;
+        m_outputBuffers[i] = nullptr;
+    }
+}
 
 CLAPHost::~CLAPHost() { shutdown(); }
 
@@ -27,6 +32,13 @@ bool CLAPHost::initialize(double sampleRate, int blockSize) {
     if (!loadPlugin()) {
         qWarning() << "Failed to load CLAP plugin:" << m_info.path;
         return false;
+    }
+    // Allocate buffers
+    for (int i = 0; i < 2; i++) {
+        m_inputBuffers[i] = new float[m_blockSize];
+        m_outputBuffers[i] = new float[m_blockSize];
+        memset(m_inputBuffers[i], 0, m_blockSize * sizeof(float));
+        memset(m_outputBuffers[i], 0, m_blockSize * sizeof(float));
     }
     // Activate the plugin
     if (m_plugin && m_plugin->activate) {
@@ -55,6 +67,12 @@ void CLAPHost::shutdown() {
         m_entry->deinit();
         m_entry = nullptr;
     }
+    for (int i = 0; i < 2; i++) {
+        delete[] m_inputBuffers[i];
+        delete[] m_outputBuffers[i];
+        m_inputBuffers[i] = nullptr;
+        m_outputBuffers[i] = nullptr;
+    }
 #ifdef _WIN32
     if (m_handle) {
         FreeLibrary((HMODULE)m_handle);
@@ -81,44 +99,53 @@ void CLAPHost::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
+    // Copy inputs to internal buffers
+    for (int c = 0; c < numChannels && c < 2; c++) {
+        if (inputs[c]) {
+            memcpy(m_inputBuffers[c], inputs[c], numFrames * sizeof(float));
+        } else {
+            memset(m_inputBuffers[c], 0, numFrames * sizeof(float));
+        }
+    }
+
     // Prepare CLAP process structure
     clap_process_t process;
     memset(&process, 0, sizeof(process));
-    process.steady_time = 0; // not used
+    process.steady_time = 0;
     process.frames_count = numFrames;
-    process.transport = nullptr; // not used
+    process.transport = nullptr;
 
-    // Set up audio buffers
-    clap_audio_buffer_t inputBuffer;
-    clap_audio_buffer_t outputBuffer;
-
-    // Input buffer setup
+    // Audio buffers
+    clap_audio_buffer_t inputBuffer, outputBuffer;
     inputBuffer.channel_count = numChannels;
-    // For simplicity, we'll allocate temporary buffers for CLAP
-    // In a real implementation, you'd use the plugin's port mapping
-    float* inputData[2] = {nullptr, nullptr};
-    float* outputData[2] = {nullptr, nullptr};
-
-    for (int c = 0; c < numChannels && c < 2; c++) {
-        inputData[c] = inputs[c];
-        outputData[c] = outputs[c];
-    }
-    inputBuffer.data32 = inputData;
+    outputBuffer.channel_count = numChannels;
+    inputBuffer.data32 = m_inputBuffers;
+    outputBuffer.data32 = m_outputBuffers;
     inputBuffer.data64 = nullptr;
+    outputBuffer.data64 = nullptr;
+
     process.inputs = &inputBuffer;
     process.inputs_count = 1;
-
-    // Output buffer setup
-    outputBuffer.channel_count = numChannels;
-    outputBuffer.data32 = outputData;
-    outputBuffer.data64 = nullptr;
     process.outputs = &outputBuffer;
     process.outputs_count = 1;
 
-    // Process the plugin
+    // Process
     bool result = m_plugin->process(m_plugin, &process);
     if (!result) {
-        qWarning() << "CLAP plugin processing failed for:" << m_info.name;
+        qWarning() << "CLAP processing failed for:" << m_info.name;
+        // Passthrough on failure
+        for (int c = 0; c < numChannels && c < 2; c++) {
+            if (inputs[c] && outputs[c] && inputs[c] != outputs[c])
+                memcpy(outputs[c], inputs[c], numFrames * sizeof(float));
+        }
+        return;
+    }
+
+    // Copy outputs back
+    for (int c = 0; c < numChannels && c < 2; c++) {
+        if (outputs[c]) {
+            memcpy(outputs[c], m_outputBuffers[c], numFrames * sizeof(float));
+        }
     }
 }
 
@@ -167,10 +194,7 @@ void* CLAPHost::createEditor(void* parent) {
 #endif
 
     bool created = m_gui->create(m_plugin, api, false);
-    if (!created) {
-        qWarning() << "Failed to create CLAP GUI";
-        return nullptr;
-    }
+    if (!created) return nullptr;
 
     m_editorWidget = new QWidget(parentWidget);
     m_editorWidget->setAttribute(Qt::WA_NativeWindow);
@@ -219,73 +243,40 @@ void CLAPHost::destroyEditor(void* editor) {
 
 bool CLAPHost::loadPlugin() {
     QString path = m_info.path;
-    if (!QFile::exists(path)) {
-        qWarning() << "CLAP file not found:" << path;
-        return false;
-    }
+    if (!QFile::exists(path)) return false;
 
 #ifdef _WIN32
     HMODULE hModule = LoadLibraryW(path.toStdWString().c_str());
-    if (!hModule) {
-        qWarning() << "Failed to load CLAP DLL:" << path;
-        return false;
-    }
+    if (!hModule) return false;
     m_handle = hModule;
     auto entryFunc = (clap_plugin_entry_t*)GetProcAddress(hModule, "clap_entry");
-    if (!entryFunc) {
-        qWarning() << "Failed to get clap_entry";
-        unloadPlugin();
-        return false;
-    }
+    if (!entryFunc) { unloadPlugin(); return false; }
 #else
     void* handle = dlopen(path.toUtf8().constData(), RTLD_LAZY);
-    if (!handle) {
-        qWarning() << "Failed to load CLAP library:" << dlerror();
-        return false;
-    }
+    if (!handle) return false;
     m_handle = handle;
     auto entryFunc = (clap_plugin_entry_t*)dlsym(handle, "clap_entry");
-    if (!entryFunc) {
-        qWarning() << "Failed to get clap_entry:" << dlerror();
-        unloadPlugin();
-        return false;
-    }
+    if (!entryFunc) { unloadPlugin(); return false; }
 #endif
 
     m_entry = entryFunc;
     if (!m_entry->init(m_info.path.toUtf8().constData())) {
-        qWarning() << "CLAP entry init failed";
         unloadPlugin();
         return false;
     }
 
     m_factory = m_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
-    if (!m_factory) {
-        qWarning() << "Failed to get plugin factory";
-        unloadPlugin();
-        return false;
-    }
+    if (!m_factory) { unloadPlugin(); return false; }
 
     const clap_plugin_descriptor_t* desc = m_factory->get_plugin_descriptor(m_factory, 0);
-    if (!desc) {
-        qWarning() << "No plugin descriptor at index 0";
-        unloadPlugin();
-        return false;
-    }
+    if (!desc) { unloadPlugin(); return false; }
 
     m_plugin = m_factory->create_plugin(m_factory, desc->id);
-    if (!m_plugin) {
-        qWarning() << "Failed to create CLAP plugin instance";
+    if (!m_plugin) { unloadPlugin(); return false; }
+
+    if (m_plugin->init && !m_plugin->init(m_plugin)) {
         unloadPlugin();
         return false;
-    }
-
-    if (m_plugin->init) {
-        if (!m_plugin->init(m_plugin)) {
-            qWarning() << "Failed to initialize CLAP plugin";
-            unloadPlugin();
-            return false;
-        }
     }
 
     const clap_plugin_gui_t* gui = (const clap_plugin_gui_t*)m_plugin->get_extension(m_plugin, CLAP_EXT_GUI);
