@@ -10,7 +10,7 @@ QString MIDIMessage::toString() const {
     return QString("%1 ch%2 d1=%3 d2=%4").arg(names[type >> 4]).arg(channel).arg(data1).arg(data2);
 }
 
-MIDI::MIDI(QObject* parent) : QObject(parent), m_midiIn(nullptr), m_midiOut(nullptr) {}
+MIDI::MIDI(QObject* parent) : QObject(parent), m_midiIn(nullptr), m_midiOut(nullptr), m_transport(nullptr) {}
 MIDI::~MIDI() { shutdown(); }
 
 bool MIDI::initialize() {
@@ -34,6 +34,7 @@ void MIDI::shutdown() {
     delete static_cast<RtMidiOut*>(m_midiOut);
     m_midiIn = m_midiOut = nullptr;
     m_initialized = false;
+    m_transport = nullptr;
 }
 
 bool MIDI::openInput(int portIndex) {
@@ -188,10 +189,17 @@ void MIDI::sendStop() {
 }
 
 void MIDI::setTransport(Transport* transport) {
+    m_transport = transport;
     if (!transport) return;
     connect(transport, &Transport::playStateChanged, this, [this](bool playing) {
         if (playing) sendStart(); else sendStop();
     });
+    connect(transport, &Transport::positionChanged, this, [this](double position) {
+        // Optionally send song position pointer
+        Q_UNUSED(position);
+    });
+    // Clock would be sent at 24ppq via a timer or audio callback
+    // This would be implemented in a real-time thread
 }
 
 void MIDI::processInputMessage(const QByteArray& data, int timestamp) {
