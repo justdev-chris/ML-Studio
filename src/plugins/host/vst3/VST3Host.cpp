@@ -17,6 +17,7 @@
 #include <pluginterfaces/vst3/ivstaudioprocessor.h>
 #include <pluginterfaces/vst3/ivsteditcontroller.h>
 #include <pluginterfaces/vst3/ivstplugview.h>
+#include <pluginterfaces/vst3/ivstevents.h>
 #include <pluginterfaces/base/fplatform.h>
 #include <public.sdk/source/vst/vstfactory.h>
 
@@ -36,7 +37,6 @@ bool VST3Host::initialize(double sampleRate, int blockSize) {
         qWarning() << "Failed to load VST3 plugin:" << m_info.path;
         return false;
     }
-    // Setup processing
     if (m_processor) {
         ProcessSetup setup;
         setup.sampleRate = m_sampleRate;
@@ -69,7 +69,6 @@ void VST3Host::process(float** inputs, float** outputs, int numChannels, int num
         return;
     }
 
-    // Prepare processing data
     ProcessData data;
     data.processMode = kRealtime;
     data.symbolicSampleSize = kSample32;
@@ -77,7 +76,6 @@ void VST3Host::process(float** inputs, float** outputs, int numChannels, int num
     data.numInputs = numChannels;
     data.numOutputs = numChannels;
 
-    // Allocate and assign buffers
     AudioBusBuffers inputBuffers[2];
     AudioBusBuffers outputBuffers[2];
     for (int i = 0; i < numChannels && i < 2; i++) {
@@ -89,14 +87,36 @@ void VST3Host::process(float** inputs, float** outputs, int numChannels, int num
     data.inputs = inputBuffers;
     data.outputs = outputBuffers;
 
-    // Process
+    // Add MIDI events if we have any
+    if (!m_midiEvents.isEmpty()) {
+        EventList eventList;
+        for (const MIDIEvent& ev : m_midiEvents) {
+            Event vstEvent;
+            vstEvent.type = Event::kNoteOnEvent;
+            vstEvent.noteOn.note = ev.note;
+            vstEvent.noteOn.velocity = ev.velocity / 127.0f;
+            vstEvent.noteOn.channel = ev.channel;
+            vstEvent.noteOn.pitch = 0;
+            vstEvent.noteOn.tuning = 0;
+            vstEvent.busIndex = 0;
+            vstEvent.sampleOffset = ev.start;
+            eventList.addEvent(vstEvent);
+        }
+        data.inputEvents = &eventList;
+    }
+
     m_processor->process(data);
+    m_midiEvents.clear();
 }
 
 void VST3Host::reset() {
     if (m_processor) {
         m_processor->reset();
     }
+}
+
+void VST3Host::sendMIDI(const QVector<MIDIEvent>& events) {
+    m_midiEvents.append(events);
 }
 
 void VST3Host::setParameter(int index, float value) {
@@ -289,7 +309,6 @@ bool VST3Host::loadPlugin() {
     }
 #endif
 
-    // Create the component
     const char* componentCID = "00000000-0000-0000-0000-000000000001";
     const char* iidComponent = "00000000-0000-0000-0000-000000000001";
     tresult result = m_factory->createInstance(componentCID, iidComponent, (void**)&m_component);
@@ -299,7 +318,6 @@ bool VST3Host::loadPlugin() {
         return false;
     }
 
-    // Create the audio processor
     const char* iidProcessor = "00000000-0000-0000-0000-000000000002";
     result = m_factory->createInstance(componentCID, iidProcessor, (void**)&m_processor);
     if (result != kResultOk) {
@@ -308,15 +326,12 @@ bool VST3Host::loadPlugin() {
         return false;
     }
 
-    // Create the edit controller
     const char* iidController = "00000000-0000-0000-0000-000000000003";
     result = m_factory->createInstance(componentCID, iidController, (void**)&m_controller);
     if (result != kResultOk) {
-        // Not all plugins have controllers; this is optional
         m_controller = nullptr;
     }
 
-    // Initialize the component
     if (m_component) {
         // m_component->initialize(nullptr);
     }
