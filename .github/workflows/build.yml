@@ -24,7 +24,7 @@ jobs:
       - name: Download VST3 SDK
         run: |
           mkdir -p libs/vst3sdk
-          curl -L -o libs/vst3sdk/vst3sdk.zip "https://github.com/steinbergmedia/vst3sdk/archive/refs/tags/v3.7.11.zip"
+          curl -L -o libs/vst3sdk/vst3sdk.zip "https://www.steinberg.net/vst3sdk"
           cd libs/vst3sdk
           unzip -q vst3sdk.zip
           mv vst3sdk-*/* .
