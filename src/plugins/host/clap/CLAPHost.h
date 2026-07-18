@@ -4,6 +4,8 @@
 #include "plugins/host/PluginHost.h"
 #include <QString>
 #include <QMap>
+#include <QVector>
+#include <QByteArray>
 
 class CLAPHost : public PluginInstance {
 public:
@@ -27,6 +29,8 @@ public:
     PluginInfo getInfo() const override { return m_info; }
     void* getNativeHandle() const override { return m_handle; }
 
+    void sendMIDI(const QVector<MIDIEvent>& events) override { m_midiEvents.append(events); }
+
 private:
     bool loadPlugin();
     void unloadPlugin();
@@ -35,12 +39,15 @@ private:
     void* m_handle = nullptr;
     void* m_plugin = nullptr;
     void* m_entry = nullptr;
+    void* m_factory = nullptr;
+    void* m_gui = nullptr;
+    void* m_editorWidget = nullptr;
 
     double m_sampleRate = 44100.0;
     int m_blockSize = 256;
     bool m_initialized = false;
 
-    // CLAP function pointers
+    // Function pointers (CLAP)
     using InitFunc = bool (*)(void* plugin);
     using DestroyFunc = void (*)(void* plugin);
     using ProcessFunc = bool (*)(void* plugin, void* processData);
@@ -54,6 +61,10 @@ private:
     GetParamFunc m_getParam = nullptr;
 
     QMap<int, float> m_parameterCache;
+    float* m_inputBuffers[2] = {nullptr, nullptr};
+    float* m_outputBuffers[2] = {nullptr, nullptr};
+    QVector<MIDIEvent> m_midiEvents;
+    QByteArray m_eventBuffer;
 
 #ifdef _WIN32
     using HMODULE = void*;
