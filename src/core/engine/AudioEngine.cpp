@@ -1,9 +1,9 @@
 #include "AudioEngine.h"
 #include <QDebug>
-#include <QTimer>
-#include <QDateTime>
 #include <QDir>
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
@@ -52,10 +52,7 @@ void AudioEngine::shutdown() {
     }
 
     clearTracks();
-    for (FX* fx : m_masterInserts) {
-        delete fx;
-    }
-    m_masterInserts.clear();
+    clearMasterInserts();
     m_mixer->reset();
     m_initialized = false;
     qDebug() << "AudioEngine shutdown";
@@ -201,7 +198,7 @@ void AudioEngine::loadProject(Project* project) {
         newTrack->setSoloed(track->isSoloed());
         newTrack->setRecordArmed(track->isRecordArmed());
 
-        for (int i = 0; i < track->getClipCount(); i++) {
+        for (int i = 0; i < track->getClipCount(); ++i) {
             Clip* clip = track->getClip(i);
             if (clip->getType() == ClipType::Audio) {
                 AudioClip* audioClip = dynamic_cast<AudioClip*>(clip);
@@ -260,81 +257,52 @@ void AudioEngine::setRecordPath(const QString& path) {
 }
 
 void AudioEngine::processAudio(float** input, float** output, int numChannels, int numFrames) {
-    if (!m_initialized) return;
-    if (numFrames <= 0) return;
+    if (!m_initialized || numFrames <= 0) return;
 
     QMutexLocker locker(&m_mutex);
 
-    // Clear output buffers
-    for (int c = 0; c < numChannels; c++) {
+    for (int c = 0; c < numChannels; ++c) {
         if (output[c]) {
-            memset(output[c], 0, numFrames * sizeof(float));
+            std::fill(output[c], output[c] + numFrames, 0.0f);
         }
     }
 
-    // Handle recording before playback
     handleRecording(input, numChannels, numFrames);
 
-    // Process each track
-    float* trackBuffer[2] = {nullptr, nullptr};
-    float* processedBuffer[2] = {nullptr, nullptr};
+    std::vector<float> trackL(numFrames, 0.0f);
+    std::vector<float> trackR(numFrames, 0.0f);
+    float* trackBuffer[2] = {trackL.data(), trackR.data()};
 
     for (Track* track : m_tracks) {
         if (track->isMuted()) continue;
 
-        trackBuffer[0] = new float[numFrames];
-        trackBuffer[1] = new float[numFrames];
-        memset(trackBuffer[0], 0, numFrames * sizeof(float));
-        memset(trackBuffer[1], 0, numFrames * sizeof(float));
+        std::fill(trackL.begin(), trackL.end(), 0.0f);
+        std::fill(trackR.begin(), trackR.end(), 0.0f);
 
-        processedBuffer[0] = new float[numFrames];
-        processedBuffer[1] = new float[numFrames];
-        memset(processedBuffer[0], 0, numFrames * sizeof(float));
-        memset(processedBuffer[1], 0, numFrames * sizeof(float));
-
-        // Process track
         track->process(trackBuffer, numFrames);
 
-        // Apply track inserts (if any)
-        // (Track inserts are stored in the track, but we need to implement track.inserts)
-        // For now, pass through
-        memcpy(processedBuffer[0], trackBuffer[0], numFrames * sizeof(float));
-        memcpy(processedBuffer[1], trackBuffer[1], numFrames * sizeof(float));
-
-        // Mix into output
-        m_mixer->mixTrack(processedBuffer, output, numFrames, track->getVolume(), track->getPan());
-
-        delete[] trackBuffer[0];
-        delete[] trackBuffer[1];
-        delete[] processedBuffer[0];
-        delete[] processedBuffer[1];
+        m_mixer->mixTrack(trackBuffer, output, numFrames, track->getVolume(), track->getPan());
     }
 
-    // Apply master inserts
     processMasterInserts(output, numChannels, numFrames);
 
-    // Update playhead position
     if (m_transport->isPlaying()) {
         m_transport->updatePosition();
     }
 
-    // Update recording clip if recording
     if (m_transport->isRecording() && m_recordingClip) {
         emit recordingProgress(m_transport->getPosition());
     }
 }
 
 void AudioEngine::processMasterInserts(float** buffer, int numChannels, int numFrames) {
-    if (m_masterInserts.isEmpty()) return;
-
     for (FX* fx : m_masterInserts) {
-        fx->process(buffer, buffer, numChannels, numFrames);
+        if (fx) fx->process(buffer, buffer, numChannels, numFrames);
     }
 }
 
 void AudioEngine::handleRecording(float** input, int numChannels, int numFrames) {
     if (!m_transport->isRecording()) {
-        // If recording was stopped, finalize the clip
         if (m_recordingClip) {
             m_recordingClip = nullptr;
             m_recordingTrack = nullptr;
@@ -343,7 +311,6 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
         return;
     }
 
-    // Find the first armed audio track
     Track* armedTrack = nullptr;
     for (Track* track : m_tracks) {
         if (track->isRecordArmed() && track->getType() == TrackType::Audio) {
@@ -352,10 +319,8 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
         }
     }
 
-    if (!armedTrack) return;
-    if (!input[0]) return;
+    if (!armedTrack || !input[0]) return;
 
-    // Initialize recording clip if needed
     if (!m_recordingClip || m_recordingTrack != armedTrack) {
         m_recordingTrack = armedTrack;
         m_recordingClip = new AudioClip(armedTrack);
@@ -365,14 +330,12 @@ void AudioEngine::handleRecording(float** input, int numChannels, int numFrames)
         armedTrack->addClip(m_recordingClip);
     }
 
-    // Append input to record buffer
     int numSamples = numFrames * numChannels;
-    for (int i = 0; i < numSamples; i++) {
+    for (int i = 0; i < numSamples; ++i) {
         m_recordBuffer.append(input[i % numChannels]);
     }
 
-    // Update clip length
-    m_recordingClip->setLength(m_recordBuffer.size());
+    m_recordingClip->setLength(m_recordBuffer.size() / numChannels);
 }
 
 void AudioEngine::setupDefaultTracks() {
@@ -386,14 +349,10 @@ void AudioEngine::setupDefaultTracks() {
 }
 
 void AudioEngine::connectTransportSignals() {
-    connect(m_transport, &Transport::positionChanged,
-            this, &AudioEngine::onTransportPositionChanged);
-    connect(m_transport, &Transport::playStateChanged,
-            this, &AudioEngine::onTransportPlayStateChanged);
-    connect(m_transport, &Transport::recordStateChanged,
-            this, &AudioEngine::onTransportRecordStateChanged);
-    connect(m_transport, &Transport::tempoChanged,
-            this, &AudioEngine::onTransportTempoChanged);
+    connect(m_transport, &Transport::positionChanged, this, &AudioEngine::onTransportPositionChanged);
+    connect(m_transport, &Transport::playStateChanged, this, &AudioEngine::onTransportPlayStateChanged);
+    connect(m_transport, &Transport::recordStateChanged, this, &AudioEngine::onTransportRecordStateChanged);
+    connect(m_transport, &Transport::tempoChanged, this, &AudioEngine::onTransportTempoChanged);
 }
 
 void AudioEngine::onTransportPositionChanged(double seconds) {
