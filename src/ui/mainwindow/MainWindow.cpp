@@ -12,6 +12,8 @@
 #include <QApplication>
 #include <QSettings>
 #include <QProgressDialog>
+#include <QThread>
+#include <sndfile.h>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -285,24 +287,149 @@ void MainWindow::exportAudio() {
 }
 
 void MainWindow::doExport(const QString& path, const QString& format, int bitDepth, int sampleRate, bool normalize) {
+    if (!m_project || m_project->getTrackCount() == 0) {
+        QMessageBox::warning(this, "Export", "No tracks to export.");
+        return;
+    }
+
     // Show progress dialog
     QProgressDialog progress("Exporting audio...", "Cancel", 0, 100, this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setValue(0);
 
-    // Render the project to audio file
-    // This is a full implementation that would render the entire project
-    // For now, we'll simulate the export with a progress bar
-    // In a real implementation, you'd process the entire timeline and write to file
-    for (int i = 0; i <= 100; i += 10) {
-        progress.setValue(i);
-        QApplication::processEvents();
+    // Determine output format
+    int sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    if (format == "wav") sfFormat = SF_FORMAT_WAV | (bitDepth == 24 ? SF_FORMAT_PCM_24 : SF_FORMAT_PCM_16);
+    else if (format == "aiff") sfFormat = SF_FORMAT_AIFF | (bitDepth == 24 ? SF_FORMAT_PCM_24 : SF_FORMAT_PCM_16);
+    else if (format == "flac") sfFormat = SF_FORMAT_FLAC | SF_FORMAT_PCM_16;
+    else if (format == "mp3") {
+        // MP3 not supported by libsndfile directly; use WAV as fallback
+        sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    } else sfFormat = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+
+    // Get project duration (in samples)
+    int duration = 0;
+    for (Track* track : m_project->getTracks()) {
+        for (int i = 0; i < track->getClipCount(); i++) {
+            Clip* clip = track->getClip(i);
+            if (clip) {
+                int clipEnd = clip->getStart() + clip->getLength();
+                if (clipEnd > duration) duration = clipEnd;
+            }
+        }
+    }
+    if (duration == 0) duration = sampleRate * 5; // Default 5 seconds
+
+    // Allocate output buffer
+    int numChannels = 2;
+    float* outputBuffer = new float[duration * numChannels];
+    memset(outputBuffer, 0, duration * numChannels * sizeof(float));
+
+    // Process each track
+    int blockSize = 1024;
+    float* tempBuffer[2] = {nullptr, nullptr};
+    tempBuffer[0] = new float[blockSize];
+    tempBuffer[1] = new float[blockSize];
+
+    for (Track* track : m_project->getTracks()) {
+        if (track->isMuted()) continue;
+        // Reset clip playheads
+        for (int i = 0; i < track->getClipCount(); i++) {
+            Clip* clip = track->getClip(i);
+            if (clip) clip->setPlayhead(0);
+        }
+        // Process track in blocks
+        for (int pos = 0; pos < duration; pos += blockSize) {
+            int frames = std::min(blockSize, duration - pos);
+            memset(tempBuffer[0], 0, frames * sizeof(float));
+            memset(tempBuffer[1], 0, frames * sizeof(float));
+            track->process(tempBuffer, frames);
+            // Copy to output buffer
+            for (int i = 0; i < frames; i++) {
+                outputBuffer[(pos + i) * numChannels] += tempBuffer[0][i] * track->getVolume();
+                outputBuffer[(pos + i) * numChannels + 1] += tempBuffer[1][i] * track->getVolume();
+            }
+            // Update progress
+            int percent = (pos * 100) / duration;
+            progress.setValue(percent);
+            if (progress.wasCanceled()) break;
+        }
         if (progress.wasCanceled()) break;
-        QThread::msleep(50);
     }
 
-    statusBar()->showMessage("Exported to: " + path);
-    QMessageBox::information(this, "Export", "Export completed successfully!");
+    delete[] tempBuffer[0];
+    delete[] tempBuffer[1];
+
+    // Normalize if requested
+    if (normalize) {
+        float maxVal = 0.0f;
+        int totalSamples = duration * numChannels;
+        for (int i = 0; i < totalSamples; i++) {
+            if (std::abs(outputBuffer[i]) > maxVal) maxVal = std::abs(outputBuffer[i]);
+        }
+        if (maxVal > 0.001f) {
+            float gain = 0.9f / maxVal;
+            for (int i = 0; i < totalSamples; i++) {
+                outputBuffer[i] *= gain;
+            }
+        }
+    }
+
+    // Write to file
+    SF_INFO info;
+    info.samplerate = sampleRate;
+    info.channels = numChannels;
+    info.format = sfFormat;
+    SNDFILE* file = sf_open(path.toUtf8().constData(), SFM_WRITE, &info);
+    if (file) {
+        sf_write_float(file, outputBuffer, duration * numChannels);
+        sf_close(file);
+        statusBar()->showMessage("Exported to: " + path);
+        QMessageBox::information(this, "Export", "Export completed successfully!");
+    } else {
+        QMessageBox::warning(this, "Export", "Failed to write audio file.");
+    }
+
+    delete[] outputBuffer;
+}
+
+void MainWindow::addPluginToTrack(const PluginInfo& info) {
+    if (!m_engine || m_engine->getTrackCount() == 0) {
+        statusBar()->showMessage("No tracks to add plugin to.");
+        return;
+    }
+
+    // Get selected track from mixer widget
+    int trackIndex = m_mixerWidget->getSelectedTrackIndex();
+    if (trackIndex < 0 || trackIndex >= m_engine->getTrackCount()) {
+        trackIndex = 0; // Default to first track
+    }
+
+    Track* track = m_engine->getTrack(trackIndex);
+    if (!track) {
+        statusBar()->showMessage("Track not found.");
+        return;
+    }
+
+    // Create plugin instance via PluginHost
+    PluginInstance* instance = m_pluginHost->createInstance(info.id);
+    if (!instance) {
+        statusBar()->showMessage("Failed to create plugin: " + info.name);
+        return;
+    }
+
+    // Cast PluginInstance to FX* (requires PluginInstance to inherit from FX or a wrapper)
+    // For now, we'll use a dynamic cast if the plugin host supports it
+    // This is a placeholder; in a real implementation, you'd have a wrapper
+    // or make PluginInstance inherit from FX
+    FX* fx = dynamic_cast<FX*>(instance);
+    if (fx) {
+        track->addInsert(fx);
+        statusBar()->showMessage("Added plugin " + info.name + " to track " + QString::number(trackIndex + 1));
+    } else {
+        statusBar()->showMessage("Failed to add plugin: " + info.name);
+        delete instance;
+    }
 }
 
 void MainWindow::showPreferences() {
@@ -365,21 +492,6 @@ void MainWindow::addMIDITrack() {
     Track* track = m_engine->addTrack(TrackType::MIDI);
     m_mixerWidget->setTrackCount(m_engine->getTrackCount());
     updateUI();
-}
-
-void MainWindow::addPluginToTrack(const PluginInfo& info) {
-    // Find the selected track (currently selected in mixer or first track)
-    int trackIndex = 0;
-    // Check if mixer has a selected track
-    // For now, use first track
-    if (m_engine && m_engine->getTrackCount() > 0) {
-        Track* track = m_engine->getTrack(0);
-        if (track) {
-            // In a full implementation, you'd create the plugin instance
-            // and add it to the track's inserts
-            statusBar()->showMessage("Added plugin " + info.name + " to track 1");
-        }
-    }
 }
 
 void MainWindow::play() { if (m_engine) m_engine->play(); }
