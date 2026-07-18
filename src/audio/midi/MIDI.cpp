@@ -1,5 +1,6 @@
 #include "MIDI.h"
 #include <QDebug>
+#include <QTimer>
 #include <RtMidi.h>
 
 bool MIDIMessage::isValid() const { return type >= 0x80 && type <= 0xFF; }
@@ -10,7 +11,7 @@ QString MIDIMessage::toString() const {
     return QString("%1 ch%2 d1=%3 d2=%4").arg(names[type >> 4]).arg(channel).arg(data1).arg(data2);
 }
 
-MIDI::MIDI(QObject* parent) : QObject(parent), m_midiIn(nullptr), m_midiOut(nullptr), m_transport(nullptr) {}
+MIDI::MIDI(QObject* parent) : QObject(parent), m_midiIn(nullptr), m_midiOut(nullptr), m_transport(nullptr), m_clockTimer(nullptr) {}
 MIDI::~MIDI() { shutdown(); }
 
 bool MIDI::initialize() {
@@ -19,6 +20,13 @@ bool MIDI::initialize() {
         m_midiIn = new RtMidiIn();
         m_midiOut = new RtMidiOut();
         m_initialized = true;
+
+        // Setup clock timer
+        m_clockTimer = new QTimer(this);
+        connect(m_clockTimer, &QTimer::timeout, this, &MIDI::sendClock);
+        m_clockTimer->setInterval(20833); // 24ppq at 120 BPM (in microseconds)
+        m_clockTimer->stop();
+
         return true;
     } catch (const std::exception& e) {
         emit error(QString("MIDI init: %1").arg(e.what()));
@@ -30,6 +38,11 @@ void MIDI::shutdown() {
     if (!m_initialized) return;
     closeInput();
     closeOutput();
+    if (m_clockTimer) {
+        m_clockTimer->stop();
+        delete m_clockTimer;
+        m_clockTimer = nullptr;
+    }
     delete static_cast<RtMidiIn*>(m_midiIn);
     delete static_cast<RtMidiOut*>(m_midiOut);
     m_midiIn = m_midiOut = nullptr;
@@ -173,33 +186,68 @@ bool MIDI::sendPitchBend(int channel, int value) {
 }
 
 void MIDI::sendClock() {
-    MIDIMessage msg; msg.type = MIDIMessage::Clock; sendMessage(msg);
+    if (!m_outputOpen) return;
+    MIDIMessage msg;
+    msg.type = MIDIMessage::Clock;
+    sendMessage(msg);
 }
 
 void MIDI::sendStart() {
-    MIDIMessage msg; msg.type = MIDIMessage::Start; sendMessage(msg);
+    if (!m_outputOpen) return;
+    MIDIMessage msg;
+    msg.type = MIDIMessage::Start;
+    sendMessage(msg);
 }
 
 void MIDI::sendContinue() {
-    MIDIMessage msg; msg.type = MIDIMessage::Continue; sendMessage(msg);
+    if (!m_outputOpen) return;
+    MIDIMessage msg;
+    msg.type = MIDIMessage::Continue;
+    sendMessage(msg);
 }
 
 void MIDI::sendStop() {
-    MIDIMessage msg; msg.type = MIDIMessage::Stop; sendMessage(msg);
+    if (!m_outputOpen) return;
+    MIDIMessage msg;
+    msg.type = MIDIMessage::Stop;
+    sendMessage(msg);
 }
 
 void MIDI::setTransport(Transport* transport) {
     m_transport = transport;
-    if (!transport) return;
+    if (!transport) {
+        if (m_clockTimer) m_clockTimer->stop();
+        return;
+    }
+
     connect(transport, &Transport::playStateChanged, this, [this](bool playing) {
-        if (playing) sendStart(); else sendStop();
+        if (playing) {
+            sendStart();
+            if (m_clockTimer) {
+                // Calculate timer interval based on tempo
+                double bpm = m_transport->getTempo();
+                int interval = static_cast<int>(60000000.0 / (bpm * 24.0)); // 24ppq
+                m_clockTimer->setInterval(interval);
+                m_clockTimer->start();
+            }
+        } else {
+            sendStop();
+            if (m_clockTimer) m_clockTimer->stop();
+        }
     });
+
+    connect(transport, &Transport::tempoChanged, this, [this](double bpm) {
+        if (m_clockTimer && m_transport && m_transport->isPlaying()) {
+            int interval = static_cast<int>(60000000.0 / (bpm * 24.0));
+            m_clockTimer->setInterval(interval);
+        }
+    });
+
     connect(transport, &Transport::positionChanged, this, [this](double position) {
-        // Optionally send song position pointer
+        // Optionally send song position pointer (SMPTE)
+        // This would be implemented for advanced sync
         Q_UNUSED(position);
     });
-    // Clock would be sent at 24ppq via a timer or audio callback
-    // This would be implemented in a real-time thread
 }
 
 void MIDI::processInputMessage(const QByteArray& data, int timestamp) {
