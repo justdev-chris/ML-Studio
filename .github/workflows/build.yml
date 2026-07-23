@@ -13,13 +13,25 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies (Windows)
+      - name: Install dependencies
         run: |
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
-          choco install qt6 portaudio libsndfile rtmidi
-          choco install git
-          echo "C:\Program Files\CMake\bin" >> $env:GITHUB_PATH
-          echo "C:\Qt\6.7.1\msvc2019_64\bin" >> $env:GITHUB_PATH
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          choco install git -y
+        shell: powershell
+
+      - name: Setup Qt6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtbase qttools'
+
+      - name: Install vcpkg dependencies
+        run: |
+          vcpkg install portaudio:x64-windows libsndfile:x64-windows rtmidi:x64-windows
+        shell: powershell
 
       - name: Download VST3 SDK
         run: |
@@ -44,9 +56,7 @@ jobs:
         shell: bash
 
       - name: Download CLAP SDK
-        shell: bash
         run: |
-          mkdir -p libs
           mkdir -p libs/clap
           curl -L -o libs/clap/clap.zip "https://github.com/free-audio/clap/archive/refs/tags/1.1.9.zip"
           cd libs/clap
@@ -54,18 +64,20 @@ jobs:
           mv clap-*/* .
           rm -rf clap-*
           rm clap.zip
+        shell: bash
 
       - name: Configure CMake
         run: |
-          cmake -B build ^
-            -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-            -DUSE_SYSTEM_LIBS=OFF ^
-            -DCMAKE_PREFIX_PATH="C:/Qt/6.7.1/msvc2019_64"
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DUSE_SYSTEM_LIBS=OFF `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+        shell: powershell
 
       - name: Build
-        run: cmake --build build --config %BUILD_TYPE% --parallel
+        run: cmake --build build --config Release --parallel
 
-      - name: Upload Artifact (Windows)
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MeowyLoopsStudio-Windows
