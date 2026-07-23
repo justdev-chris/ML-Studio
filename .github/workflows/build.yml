@@ -22,11 +22,12 @@ jobs:
       - name: Setup Qt6
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.5.3'
+          version: '6.5.0'
           host: 'windows'
           target: 'desktop'
-          arch: 'win64_msvc2022_64'
-          modules: 'qtbase qttools'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtbase qttools qtsvg'
+          cache: true
 
       - name: Install vcpkg dependencies
         run: |
@@ -39,8 +40,10 @@ jobs:
           curl -L -o libs/vst3sdk/vst3sdk.zip "https://www.steinberg.net/vst3sdk"
           cd libs/vst3sdk
           unzip -q vst3sdk.zip
-          mv VST_SDK/* .
-          rm -rf VST_SDK
+          if [ -d "VST_SDK" ]; then
+            mv VST_SDK/* .
+            rm -rf VST_SDK
+          fi
           rm vst3sdk.zip
         shell: bash
 
